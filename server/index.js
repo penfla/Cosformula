@@ -24,6 +24,7 @@ import { router as formulas } from './routes/formulas.js';
 import { router as files } from './routes/files.js';
 import { router as inci } from './routes/inci.js';
 import { router as backup } from './routes/backup.js';
+import { router as printRoute } from './routes/print.js';
 import { router as setup } from './routes/setup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -73,6 +74,7 @@ export function createApp({ port = 3000, host = '127.0.0.1' } = {}) {
   api.use('/setup', setup);
   api.use('/inci', inci);
   api.use('/', backup);
+  api.use('/', printRoute);
   app.use('/api', api);
   app.use('/api', (_q, _r, next) => next(httpError(404, 'Endpoint non trovato')));
 

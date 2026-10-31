@@ -78,3 +78,10 @@ textarea.notes{width:100%;min-height:60px;resize:vertical}
 
 .fs{border:1px solid var(--line);border-radius:8px;margin:12px 0;padding:8px 12px;display:flex;flex-direction:column;gap:6px}.fs legend{font-size:12px;color:var(--muted);padding:0 4px}
 #dlg-setup .fld{margin-top:8px}code{background:var(--bg);padding:1px 4px;border-radius:4px}
+
+.row.wrap{flex-wrap:wrap;margin-top:10px}
+.pop .att{display:flex;align-items:center;gap:8px;padding:4px;border-radius:6px;cursor:pointer;font-size:12px;word-break:break-all}.pop .att:hover{background:var(--sel)}
+.pop .att img{width:44px;height:44px;object-fit:cover;border-radius:4px}.pop .att .ficon{width:44px;text-align:center;font-size:22px}
+#attach-pop{width:340px}
+.ql-editor img{max-width:min(100%,560px);height:auto}.ql-editor video{max-width:100%;max-height:340px}
+.ql-toolbar .ql-attach{font-size:13px;padding:0 6px}

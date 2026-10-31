@@ -31,7 +31,7 @@ export function loadFormula(db, id) {
   const f = db.prepare('SELECT * FROM formulas WHERE id=?').get(id);
   if (!f) throw httpError(404, 'Formula non trovata');
   f.ingredients = db.prepare('SELECT * FROM ingredients WHERE formula_id=? ORDER BY position, id').all(id);
-  f.files = db.prepare('SELECT id,original_name,mime,kind,size,caption,created_at FROM files WHERE formula_id=? ORDER BY id').all(id);
+  f.files = db.prepare('SELECT id,original_name,stored_name,mime,kind,size,caption,created_at FROM files WHERE formula_id=? ORDER BY id').all(id);
   return f;
 }
 
@@ -89,7 +89,8 @@ router.put('/:fid', (req, res) => {
 router.put('/:fid/process', (req, res) => {
   const db = getDb(req.params.slug);
   const id = fid(req);
-  const html = cleanHtml(req.body?.html);
+  const allowed = new Set(db.prepare('SELECT stored_name FROM files').all().map(r => r.stored_name));
+  const html = cleanHtml(req.body?.html, allowed);
   const r = db.prepare("UPDATE formulas SET process_html=?,updated_at=datetime('now') WHERE id=?").run(html, id);
   if (!r.changes) throw httpError(404, 'Formula non trovata');
   res.json({ html });

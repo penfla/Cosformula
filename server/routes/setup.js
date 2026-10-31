@@ -41,7 +41,7 @@ router.post('/', (req, res) => {
     const id = db.prepare('INSERT INTO formulas(code,name,version,batch_g,notes,process_html) VALUES(?,?,?,?,?,?)')
       .run('ESEMPIO-01', 'Crema idratante O/A (esempio didattico)', '1.0', 200,
         'Esempio di compilazione: valori indicativi non validati. Eliminare o modificare.',
-        '<h3>Processo</h3><ol><li data-list="ordered">Scaldare la fase A a 75 °C sotto agitazione.</li><li data-list="ordered">Scaldare la fase B a 75 °C fino a fusione completa.</li><li data-list="ordered">Emulsionare B in A con omogeneizzatore per 3 min.</li><li data-list="ordered">Raffreddare sotto agitazione; sotto 40 °C aggiungere la fase C.</li><li data-list="ordered">Verificare e correggere il pH.</li></ol>').lastInsertRowid;
+        '<ol><li data-list="ordered">Scaldare la fase A a 75 °C sotto agitazione.</li><li data-list="ordered">Scaldare la fase B a 75 °C fino a fusione completa.</li><li data-list="ordered">Emulsionare B in A con omogeneizzatore per 3 min.</li><li data-list="ordered">Raffreddare sotto agitazione; sotto 40 °C aggiungere la fase C.</li><li data-list="ordered">Verificare e correggere il pH.</li></ol>').lastInsertRowid;
     writeIngredients(db, id, EXAMPLE.map(([phase, trade_name, inci, percent]) => ({
       phase, trade_name, inci, inci_status: inci && exact(inci) ? 'verified' : inci ? 'unverified' : 'none', percent, grams: Math.round(percent * 2 * 1000) / 1000 })));
   }

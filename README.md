@@ -17,9 +17,17 @@ Lo script installa le dipendenze al primo avvio, avvia il server e **apre il bro
 3. opzionalmente inserisce una formula di esempio (valori indicativi, non validati).
 
 Se la porta 3000 è occupata viene usata la successiva (3001…). Per chiudere: Ctrl+C nella finestra del terminale.
-`npm test` esegue i 10 test API/sicurezza (richiede `npm install` completo, con le devDependencies).
+`npm test` esegue gli 11 test API/sicurezza (richiede `npm install` completo, con le devDependencies).
 Dati in `data/` (da includere nei backup): `data/projects/…`, `data/cosing.db`, `data/config.json`.
 Variabili: `PORT`, `HOST`, `COSFORMULA_DATA` (cartella dati), `COSFORMULA_ALLOWED_HOSTS` (host extra, separati da virgola), `COSING_LIVE_URL` (vedi sotto).
+
+## Foto e file dentro il processo
+Nell'editor del processo il pulsante **📎 Allegato** inserisce, alla posizione del cursore, un allegato della formula: le **immagini** compaiono nel testo, i **video** come lettore incorporato, gli altri file come link. In alternativa si possono **trascinare o incollare** file direttamente nell'editor (vengono caricati e inseriti). Nel DB il riferimento è `cosfile:<nome-file>` (stabile tra export/import); eliminando l'allegato i riferimenti vengono rimossi dal testo.
+
+## Export, PDF e booklet
+- **Scheda singola**: pulsanti *PDF / Stampa* (pagina impaginata → dialogo di stampa → “Salva come PDF”) e *HTML* (file autonomo con immagini incorporate, apribile anche in Word/LibreOffice).
+- **Booklet**: *Booklet / PDF…* in alto → scegli tutte o alcune schede, formato (A4/A5/Letter), copertina, indice, allegati → *Anteprima / PDF* oppure *Scarica HTML autonomo*. Ogni scheda: dati, tabella formula con totali, lista INCI per % decrescente, note, processo con le immagini, allegati. I video sono sostituiti da un segnaposto con il nome file.
+- Il PDF è generato dal motore di stampa del browser (nessuna dipendenza aggiuntiva). Disattiva “Intestazioni e piè di pagina” nel dialogo; i numeri di pagina e il piè di pagina sono inseriti dal CSS `@page` (richiede un browser Chromium recente; altrimenti mancano solo quelli). Per un libretto fronte/retro usa A5 oppure la funzione “opuscolo” del visualizzatore PDF.
 
 ## Verifica INCI (fonti ufficiali)
 - Nella procedura guidata si può scegliere un **seed minimale NON ufficiale** (148 nomi INCI comuni, `data/cosing-seed.csv`); l'interfaccia mostra un avviso finché non si importa il dataset completo.

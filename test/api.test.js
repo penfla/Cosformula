@@ -150,3 +150,46 @@ test('Origin malformato/null → 403 (non 500)', async () => {
   const r = await request(app).post('/api/projects').set({ Host: H.Host, Origin: 'null' }).send({ name: 'x' });
   assert.equal(r.status, 403);
 });
+
+test('allegati nel processo: riferimenti, rimozione, export/import, stampa', async () => {
+  const p = (await api.post('/api/projects').send({ name: 'Embed' })).body.slug;
+  const f = (await api.post(`/api/projects/${p}/formulas`).send({ name: 'Con <b>foto</b>', code: 'X&1' })).body.id;
+  await api.put(`/api/projects/${p}/formulas/${f}`).send({ name: 'Con <b>foto</b>', code: 'X&1', batch_g: 100, ingredients: [{ trade_name: 'A', inci: 'Aqua', percent: 60 }, { trade_name: 'B', inci: 'Glycerin', percent: 40 }, { trade_name: 'C<script>', inci: 'Xyz Abc', inci_status: 'unverified', percent: 0.5 }] });
+  const up = (await api.post(`/api/projects/${p}/formulas/${f}/files`).attach('files', PNG, 'passo1.png')).body.created[0];
+  const name = up.stored_name;
+  assert.match(name, /\.png$/);
+  const html = `<p>Passo 1</p><img src="cosfile:${name}"><img src="cosfile:00000000-0000-0000-0000-000000000000.png"><img src="https://evil.example/x.png"><video src="cosfile:${name}" controls></video><p><a href="cosfile:${name}">file</a></p>`;
+  const put = await api.put(`/api/projects/${p}/formulas/${f}/process`).send({ html });
+  assert.match(put.body.html, new RegExp(`<img src="cosfile:${name}"`));
+  assert.ok(!/evil\.example|000000000000/.test(put.body.html), 'riferimenti esterni/inesistenti rimossi');
+  // accesso per nome
+  const raw = await api.get(`/api/projects/${p}/files/n/${name}/raw`);
+  assert.equal(raw.status, 200); assert.equal(raw.headers['content-type'], 'image/png');
+  assert.equal((await api.get(`/api/projects/${p}/files/n/..%2F..%2Fx/raw`)).status, 400);
+  // stampa: escaping, selezione, ids non validi
+  const pr = await api.get(`/api/projects/${p}/print?ids=${f}&cover=1&toc=1`);
+  assert.equal(pr.status, 200);
+  assert.ok(pr.text.includes('Con &lt;b&gt;foto&lt;/b&gt;') && !pr.text.includes('<b>foto</b>') && !pr.text.includes('C<script>'));
+  assert.ok(pr.text.includes(`/api/projects/${p}/files/n/${name}/raw`) && !pr.text.includes('cosfile:'));
+  assert.match(pr.text, /Lista INCI/); assert.match(pr.text, /Aqua, Glycerin, Xyz Abc/);
+  assert.equal((await api.get(`/api/projects/${p}/print?ids=1;drop`)).status, 400);
+  const dlh = await api.get(`/api/projects/${p}/print?ids=all&download=1`);
+  assert.match(dlh.headers['content-disposition'], /attachment/); assert.ok(dlh.text.includes('data:image/png;base64,')); assert.ok(!dlh.text.includes('print.js'));
+  // export/import: i riferimenti seguono i nuovi nomi file
+  const z = await request(app).get(`/api/projects/${p}/export?format=zip`).set('Host', H.Host).buffer().parse((res, cb) => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); });
+  const imp = (await api.post('/api/import').attach('file', z.body, 'e.zip')).body.imported[0].slug;
+  const nf = (await api.get(`/api/projects/${imp}/formulas`)).body[0];
+  const got = (await api.get(`/api/projects/${imp}/formulas/${nf.id}`)).body;
+  const newName = got.files[0].stored_name;
+  assert.notEqual(newName, name);
+  assert.ok(got.process_html.includes(`cosfile:${newName}`) && !got.process_html.includes(name));
+  // import JSON (senza file): riferimenti orfani eliminati
+  const j = await api.get(`/api/projects/${p}/export?format=json`);
+  const imp2 = (await api.post('/api/import').attach('file', Buffer.from(j.text), 'e.json')).body.imported[0].slug;
+  const g2 = (await api.get(`/api/projects/${imp2}/formulas/${(await api.get(`/api/projects/${imp2}/formulas`)).body[0].id}`)).body;
+  assert.ok(!g2.process_html.includes('cosfile:') && !g2.process_html.includes('<img'));
+  // eliminazione allegato → riferimenti rimossi dal processo
+  assert.equal((await api.del(`/api/projects/${p}/files/${up.id}`)).status, 200);
+  const after = (await api.get(`/api/projects/${p}/formulas/${f}`)).body.process_html;
+  assert.ok(!after.includes('cosfile:') && !after.includes('<img') && after.includes('Passo 1'));
+});

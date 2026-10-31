@@ -117,6 +117,7 @@ async function importOne(data, files, fallbackName) {
     const dir = uploadsDir(proj.slug);
     const db = getDb(proj.slug);
     const prepared = [];
+    const remap = new Map(); // vecchio stored_name -> nuovo
     for (const f of data.formulas) {
       const fl = [];
       for (const file of Array.isArray(f.files) ? f.files.slice(0, 500) : []) {
@@ -127,6 +128,7 @@ async function importOne(data, files, fallbackName) {
         const stored = `${crypto.randomUUID()}.${v.ext}`;
         fs.copyFileSync(src, path.join(dir, stored));
         const sha = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
+        remap.set(String(file.stored_name), stored);
         fl.push({ original_name: str(file.original_name, 200) || stored, stored, mime: v.mime, kind: v.kind, size, sha, caption: str(file.caption, 500) });
       }
       prepared.push([f, fl]);
@@ -134,10 +136,12 @@ async function importOne(data, files, fallbackName) {
     const insF = db.prepare('INSERT INTO formulas(code,name,version,batch_g,notes,process_html,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
     const insI = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
     const insFile = db.prepare('INSERT INTO files(formula_id,original_name,stored_name,mime,kind,size,sha256,caption) VALUES(?,?,?,?,?,?,?,?)');
+    const allowed = new Set(remap.values());
+    const fixRefs = html => { let h = String(html ?? ''); for (const [o, n] of remap) h = h.split(`cosfile:${o}`).join(`cosfile:${n}`); return cleanHtml(h, allowed); };
     db.transaction(() => {
       for (const [f, fl] of prepared) {
         const id = insF.run(str(f.code, 40), str(f.name, 200) || 'Senza nome', str(f.version, 20), num(f.batch_g), str(f.notes, 5000),
-          cleanHtml(f.process_html), str(f.created_at, 30) || new Date().toISOString(), str(f.updated_at, 30) || new Date().toISOString()).lastInsertRowid;
+          fixRefs(f.process_html), str(f.created_at, 30) || new Date().toISOString(), str(f.updated_at, 30) || new Date().toISOString()).lastInsertRowid;
         (Array.isArray(f.ingredients) ? f.ingredients.slice(0, 500) : []).forEach((i, pos) => {
           const inci = str(i?.inci, 300);
           let st = ['verified', 'unverified', 'none'].includes(i?.inci_status) ? i.inci_status : 'unverified';

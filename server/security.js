@@ -37,16 +37,34 @@ export function num(v) {
   return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : null;
 }
 
-/** Process text: allowlist of Quill-compatible tags, http/https/mailto links only. */
-export function cleanHtml(html) {
-  return sanitizeHtml(String(html ?? '').slice(0, 500_000), {
+export const FILE_REF = 'cosfile:';
+const REF_RE = /cosfile:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{2,5})/g;
+/** Nomi file (stored_name) referenziati nel processo tramite `cosfile:<uuid>.<ext>`. */
+export const refsIn = html => new Set([...String(html || '').matchAll(REF_RE)].map(m => m[1]));
+
+/**
+ * Processo preparativo: allowlist di tag/attributi compatibili con Quill, link solo http/https/mailto.
+ * Immagini/video/link a file del progetto: solo come riferimento `cosfile:<stored_name>`; con `allowed` (Set)
+ * i riferimenti a file inesistenti vengono rimossi.
+ */
+export function cleanHtml(html, allowed = null) {
+  const ok = v => typeof v === 'string' && v.startsWith(FILE_REF) && STORED_RE.test(v.slice(FILE_REF.length)) && (!allowed || allowed.has(v.slice(FILE_REF.length)));
+  return sanitizeHtml(String(html ?? '').slice(0, 1_000_000), {
     allowedTags: ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'sub', 'sup', 'h1', 'h2', 'h3', 'ul', 'ol', 'li',
-      'blockquote', 'pre', 'code', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
-    allowedAttributes: { a: ['href', 'title', 'target', 'rel'], li: ['data-list'], '*': ['class'] },
+      'blockquote', 'pre', 'code', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'video'],
+    allowedAttributes: { a: ['href', 'title', 'target', 'rel'], li: ['data-list'], img: ['src', 'alt'], video: ['src', 'controls', 'preload'], '*': ['class'] },
     allowedClasses: { '*': [/^ql-(indent-\d|align-(center|right|justify)|syntax|code-block)$/] },
     allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['cosfile'], video: ['cosfile'], a: ['http', 'https', 'mailto', 'cosfile'] },
     allowProtocolRelative: false,
-    transformTags: { a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer', target: '_blank' }) },
+    transformTags: {
+      a: (tag, attribs) => {
+        const a = { ...attribs, rel: 'noopener noreferrer', target: '_blank' };
+        if (a.href?.startsWith(FILE_REF) && !ok(a.href)) delete a.href;
+        return { tagName: 'a', attribs: a };
+      },
+    },
+    exclusiveFilter: f => (f.tag === 'img' || f.tag === 'video') && !ok(f.attribs.src),
   });
 }
 

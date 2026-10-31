@@ -28,6 +28,7 @@ AI disclosure: questo strumento esegue calcoli deterministici; non genera conten
   <div class="spacer"></div>
   <button id="btn-new-project" class="btn">+ Nuovo progetto</button>
   <button id="btn-open-project" class="btn">Apri progetto…</button>
+  <button id="btn-booklet" class="btn">Booklet / PDF…</button>
   <button id="btn-backup" class="btn">Database</button>
   <button id="btn-info" class="btn" aria-label="Informazioni">ⓘ</button>
 </header>
@@ -43,6 +44,15 @@ AI disclosure: questo strumento esegue calcoli deterministici; non genera conten
 <footer class="foot">© 2026 Flavio Pendolino | <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial 1.0.0</a></footer>
 
 <dialog id="dlg-projects"><form method="dialog"><h2>Progetti</h2><ul id="project-list" class="plist"></ul><div class="row end"><button class="btn">Chiudi</button></div></form></dialog>
+<dialog id="dlg-booklet"><form method="dialog"><h2>Esporta schede / Booklet stampabile</h2>
+  <p class="muted">Scegli le schede da includere. “Anteprima / PDF” apre una pagina impaginata: dal dialogo di stampa del browser scegli “Salva come PDF”.</p>
+  <div class="row"><input id="bl-filter" type="search" placeholder="Filtra…" aria-label="Filtra schede" style="flex:1"><button type="button" id="bl-all" class="btn small">Tutte</button><button type="button" id="bl-none" class="btn small">Nessuna</button></div>
+  <ul id="bl-list" class="plist"></ul>
+  <div class="row wrap"><label>Formato <select id="bl-size"><option>A4</option><option>A5</option><option>Letter</option></select></label>
+    <label><input type="checkbox" id="bl-cover" checked> Copertina</label><label><input type="checkbox" id="bl-toc" checked> Indice</label><label><input type="checkbox" id="bl-att" checked> Allegati</label></div>
+  <p id="bl-count" class="muted" role="status"></p>
+  <div class="row end"><button class="btn">Chiudi</button><button type="button" id="bl-dl" class="btn">Scarica HTML autonomo</button><button type="button" id="bl-print" class="btn primary">Anteprima / PDF</button></div>
+</form></dialog>
 <dialog id="dlg-backup"><form method="dialog"><h2>Database</h2>
   <p>Esporta o importa le formulazioni. Lo ZIP include gli allegati; il JSON solo i dati.</p>
   <div class="stack">
@@ -93,6 +103,7 @@ non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).</pr
 </form></dialog>
 <dialog id="dlg-prompt"><form method="dialog"><h2 id="prompt-title"></h2><input id="prompt-input" maxlength="100" autocomplete="off"><div class="row end"><button value="cancel" class="btn">Annulla</button><button value="ok" class="btn primary">OK</button></div></form></dialog>
 <div id="inci-pop" class="pop" hidden role="dialog" aria-label="Verifica INCI"></div>
+<div id="attach-pop" class="pop" hidden role="dialog" aria-label="Inserisci allegato"></div>
 <div id="ac" class="ac" hidden role="listbox"></div>
 <script src="/vendor/dompurify/purify.min.js"></script>
 <script src="/vendor/quill/quill.js"></script>

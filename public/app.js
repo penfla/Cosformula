@@ -120,12 +120,18 @@ async function saveNow() {
   });
   return saving;
 }
-const saveProcess = debounce(async () => {
-  if (!S.quill || !S.current) return;
-  try { await api(`${qs()}/formulas/${S.current.id}/process`, { method: 'PUT', body: { html: S.quill.root.innerHTML } }); setState('Processo salvato ' + new Date().toLocaleTimeString()); }
-  catch (e) { setState('Errore: ' + e.message); }
-}, 800);
-async function flushSave() { if (dirty) await saveNow(); await saving; }
+let procDirty = false;
+async function saveProcessNow() {
+  saveProcess.flush();
+  if (!procDirty || !S.quill || !S.current) return;
+  procDirty = false;
+  try {
+    const r = await api(`${qs()}/formulas/${S.current.id}/process`, { method: 'PUT', body: { html: fromUrl(S.quill.root.innerHTML) } });
+    S.current.process_html = r.html; setState('Processo salvato ' + new Date().toLocaleTimeString());
+  } catch (e) { procDirty = true; setState('Errore: ' + e.message); }
+}
+const saveProcess = debounce(saveProcessNow, 800);
+async function flushSave() { if (dirty) await saveNow(); await saveProcessNow(); await saving; }
 
 async function openFormula(id) {
   await flushSave();
@@ -145,6 +151,8 @@ function renderSheet() {
   sh.append(
     h('div', { class: 'sheet-head' }, h('h2', { style: 'margin:0' }, f.name),
       h('div', { class: 'row' }, h('span', { id: 'save-state' }, ''),
+        h('button', { class: 'btn small', onclick: () => exportSheets([f.id], 'print') }, 'PDF / Stampa'),
+        h('button', { class: 'btn small', onclick: () => exportSheets([f.id], 'html') }, 'HTML'),
         h('button', { class: 'btn small', onclick: dupFormula }, 'Duplica'),
         h('button', { class: 'btn small danger', onclick: delFormula }, 'Elimina'))),
     h('div', { class: 'hdr' }, field('Codice', 'code', { max: 40 }), field('Nome formula', 'name'), field('Versione', 'version', { max: 20 }), field('Batch (g)', 'batch_g', { num: true, max: 15 })),
@@ -261,15 +269,63 @@ async function verifyAll() {
 document.addEventListener('click', e => { const p = $('#inci-pop'); if (!p.hidden && !p.contains(e.target) && !e.target.closest('.badge')) p.hidden = true; });
 
 // ---- editor ----
-function initEditor() {
-  const toolbar = [[{ header: [1, 2, 3, false] }], ['bold', 'italic', 'underline', 'strike'], [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }], [{ align: [] }], ['blockquote', 'link'], ['clean']];
-  S.quill = new window.Quill('#editor', { theme: 'snow', modules: { toolbar }, placeholder: 'Descrivi il processo preparativo: fasi, temperature, tempi, agitazione…' });
-  const safe = window.DOMPurify.sanitize(S.current.process_html || '', { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i });
-  S.quill.setContents(S.quill.clipboard.convert({ html: safe }), 'silent');
-  S.quill.on('text-change', (_d, _o, src) => { if (src === 'user') { setState('Modifiche non salvate…'); saveProcess(); } });
+const NAME_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.[a-z0-9]{2,5}';
+// Nel DB gli allegati incorporati sono `cosfile:<nome>` (stabili tra export/import); nell'editor sono URL reali.
+const fileUrl = n => `/api/projects/${S.active}/files/n/${n}/raw`;
+const toUrl = html => html.replace(new RegExp('cosfile:(' + NAME_RE + ')', 'g'), (_m, n) => fileUrl(n));
+const fromUrl = html => html.replace(new RegExp('/api/projects/[a-z0-9-]+/files/n/(' + NAME_RE + ')/raw', 'g'), 'cosfile:$1');
+if (window.Quill) {
+  const BlockEmbed = window.Quill.import('blots/block/embed');
+  class FileVideo extends BlockEmbed {
+    static create(url) { const n = super.create(); n.setAttribute('src', url); n.setAttribute('controls', ''); n.setAttribute('preload', 'metadata'); return n; }
+    static value(n) { return n.getAttribute('src'); }
+  }
+  FileVideo.blotName = 'filevideo'; FileVideo.tagName = 'video';
+  window.Quill.register(FileVideo);
+  window.Quill.import('formats/link').PROTOCOL_WHITELIST = ['http', 'https', 'mailto'];
 }
-// Quill: i link possono solo http/https/mailto
-window.Quill?.import('formats/link') && (window.Quill.import('formats/link').PROTOCOL_WHITELIST = ['http', 'https', 'mailto']);
+function setEditorHtml(html) {
+  const safe = window.DOMPurify.sanitize(toUrl(html || ''), { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|\/api\/projects\/)/i });
+  S.quill.setContents(S.quill.clipboard.convert({ html: safe }), 'silent');
+}
+async function reloadProcess() { const f = await api(`${qs()}/formulas/${S.current.id}`); S.current.process_html = f.process_html; S.current.files = f.files; setEditorHtml(f.process_html); renderGallery(); }
+
+function insertAttachment(f) {
+  const q = S.quill, idx = (q.getSelection(true) || { index: q.getLength() }).index, url = fileUrl(f.stored_name);
+  if (f.kind === 'image') { q.insertEmbed(idx, 'image', url, 'user'); q.insertText(idx + 1, '\n', 'user'); q.setSelection(idx + 2, 0, 'silent'); }
+  else if (f.kind === 'video') { q.insertEmbed(idx, 'filevideo', url, 'user'); q.setSelection(idx + 1, 0, 'silent'); }
+  else { q.insertText(idx, f.original_name, 'link', url, 'user'); q.setSelection(idx + f.original_name.length, 0, 'silent'); }
+}
+async function addFilesToProcess(files) {
+  if (!files.length) return;
+  const r = await uploadFiles(files, p => setState(`Caricamento ${p}%`));
+  S.current.files.push(...r.created); renderGallery();
+  for (const f of r.created) insertAttachment(f);
+  setState(r.errors.length ? 'Rifiutati: ' + r.errors.map(e => `${e.name} (${e.error})`).join('; ') : 'Allegato inserito');
+}
+function showAttachPop(anchor) {
+  const pop = $('#attach-pop'); pop.replaceChildren();
+  const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { pop.hidden = true; addFilesToProcess([...input.files]); } });
+  pop.append(h('strong', {}, 'Inserisci nel processo'), h('div', { class: 'muted' }, 'Clic su un allegato per inserirlo alla posizione del cursore. Puoi anche trascinare o incollare file nell’editor.'));
+  for (const f of S.current.files) pop.append(h('div', { class: 'att', role: 'button', tabindex: 0, onclick: () => { pop.hidden = true; insertAttachment(f); } },
+    f.kind === 'image' ? h('img', { src: fileUrl(f.stored_name), alt: '' }) : h('span', { class: 'ficon' }, f.kind === 'video' ? '▶' : '📄'), h('span', {}, f.original_name)));
+  if (!S.current.files.length) pop.append(h('p', { class: 'muted' }, 'Nessun allegato ancora caricato.'));
+  pop.append(h('button', { class: 'btn small primary', onclick: () => input.click() }, 'Carica da computer…'), input);
+  position(pop, anchor); pop.hidden = false;
+}
+document.addEventListener('click', e => { const p = $('#attach-pop'); if (!p.hidden && !p.contains(e.target) && !e.target.closest('.ql-attach')) p.hidden = true; });
+
+function initEditor() {
+  const toolbar = { container: [[{ header: [1, 2, 3, false] }], ['bold', 'italic', 'underline', 'strike'], [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }], [{ align: [] }], ['blockquote', 'link'], ['attach'], ['clean']],
+    handlers: { attach() { showAttachPop(document.querySelector('.ql-attach')); } } };
+  S.quill = new window.Quill('#editor', { theme: 'snow', modules: { toolbar }, placeholder: 'Descrivi il processo preparativo: fasi, temperature, tempi, agitazione… Inserisci foto e file con 📎, trascinandoli o incollandoli.' });
+  const b = document.querySelector('.ql-attach'); b.textContent = '📎 Allegato'; b.title = 'Inserisci un allegato (foto, video, file) nel testo'; b.style.width = 'auto'; b.setAttribute('aria-label', 'Inserisci allegato');
+  setEditorHtml(S.current.process_html);
+  procDirty = false;
+  S.quill.on('text-change', (_d, _o, src) => { if (src === 'user') { procDirty = true; setState('Modifiche non salvate…'); saveProcess(); } });
+  S.quill.root.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFilesToProcess([...e.dataTransfer.files]); } }, true);
+  S.quill.root.addEventListener('paste', e => { if (e.clipboardData?.files?.length) { e.preventDefault(); e.stopPropagation(); addFilesToProcess([...e.clipboardData.files]); } }, true);
+}
 
 // ---- allegati ----
 const ICON = { doc: '📄', data: '📊' };
@@ -281,28 +337,65 @@ function fileCard(fl) {
   return h('div', { class: 'card' }, media, h('div', { class: 'nm' }, fl.original_name, ' · ', (fl.size >= 1048576 ? `${(fl.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(fl.size / 1024))} KB`)),
     h('input', { value: fl.caption, placeholder: 'Didascalia', maxlength: 500, 'aria-label': 'Didascalia', onchange: e => api(`${qs()}/files/${fl.id}`, { method: 'PATCH', body: { caption: e.target.value } }).catch(err => toast(err.message)) }),
     h('div', { class: 'row' }, h('a', { class: 'btn small', href: url + (fl.kind === 'image' || fl.kind === 'video' || fl.mime === 'application/pdf' ? '' : '?download=1'), target: '_blank', rel: 'noopener noreferrer' }, fl.kind === 'doc' || fl.kind === 'data' ? 'Apri / scarica' : 'Apri'),
-      h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Eliminare l’allegato?')) return; await api(`${qs()}/files/${fl.id}`, { method: 'DELETE' }); S.current.files = S.current.files.filter(x => x.id !== fl.id); renderGallery(); } }, 'Elimina')));
+      h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Eliminare l’allegato?')) return; await saveProcessNow(); await api(`${qs()}/files/${fl.id}`, { method: 'DELETE' }); await reloadProcess(); } }, 'Elimina')));
 }
 function renderGallery() { const g = $('#gallery'); g.replaceChildren(...S.current.files.map(fileCard)); }
+function uploadFiles(files, onProgress = () => {}) {
+  return new Promise(resolve => {
+    const fd = new FormData(); for (const f of files) fd.append('files', f);
+    const x = new XMLHttpRequest(); x.open('POST', `/api/projects/${S.active}/formulas/${S.current.id}/files`);
+    x.upload.onprogress = e => onProgress(Math.round(e.loaded / e.total * 100));
+    x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch { /* */ }
+      resolve({ created: j.created || [], errors: j.errors || (j.error ? [{ name: '', error: j.error }] : [{ name: '', error: 'Errore' }]) }); };
+    x.onerror = () => resolve({ created: [], errors: [{ name: '', error: 'Errore di rete' }] });
+    x.send(fd);
+  });
+}
 function buildFiles() {
   const status = h('div', { class: 'muted', role: 'status' });
   const input = h('input', { type: 'file', multiple: true, hidden: true, accept: '.jpg,.jpeg,.png,.gif,.webp,.avif,.mp4,.mov,.webm,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.txt,.md,.csv,.json', onchange: () => up(input.files) });
   const drop = h('div', { class: 'drop', ondragover: e => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'), ondrop: e => { e.preventDefault(); drop.classList.remove('over'); up(e.dataTransfer.files); } },
     'Trascina qui i file (immagini, video mp4/webm/mov, PDF, docx, xlsx, pptx, odt/ods, txt, md, csv, json) oppure ', h('button', { class: 'btn small', onclick: () => input.click() }, 'sfoglia'), input, status);
-  function up(files) {
-    if (!files.length) return; const fd = new FormData(); for (const f of files) fd.append('files', f);
-    const x = new XMLHttpRequest(); x.open('POST', `/api/projects/${S.active}/formulas/${S.current.id}/files`);
-    x.upload.onprogress = e => { status.textContent = `Caricamento… ${Math.round(e.loaded / e.total * 100)}%`; };
-    x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch { /* */ }
-      if (j.created?.length) { S.current.files.push(...j.created); renderGallery(); }
-      status.textContent = (j.errors?.length ? 'Rifiutati: ' + j.errors.map(e => `${e.name} (${e.error})`).join('; ') : j.created?.length ? 'Caricamento completato' : j.error || 'Errore'); };
-    x.onerror = () => { status.textContent = 'Errore di rete'; };
-    x.send(fd);
+  async function up(files) {
+    if (!files.length) return;
+    const r = await uploadFiles([...files], p => { status.textContent = `Caricamento… ${p}%`; });
+    if (r.created.length) { S.current.files.push(...r.created); renderGallery(); }
+    status.textContent = r.errors.length ? 'Rifiutati: ' + r.errors.map(e => `${e.name} (${e.error})`).join('; ') : 'Caricamento completato';
   }
   const wrap = h('div', {}, drop, h('div', { id: 'gallery', class: 'gallery' }));
   queueMicrotask(renderGallery);
   return wrap;
 }
+
+async function exportSheets(ids, mode, o = {}) {
+  await flushSave();
+  const single = ids.length === 1;
+  const q = new URLSearchParams({ ids: ids.join(','), size: o.size || 'A4', cover: o.cover ? '1' : '0', toc: o.toc ? '1' : '0', attachments: o.attachments === false ? '0' : '1' });
+  if (mode === 'html') { q.set('download', '1'); dl(`/api/projects/${S.active}/print?${q}`); }
+  else { q.set('autoprint', '1'); window.open(`/api/projects/${S.active}/print?${q}`, '_blank', 'noopener'); }
+  void single;
+}
+function openBooklet() {
+  if (!S.active) return toast('Apri prima un progetto');
+  const ul = $('#bl-list'), filter = $('#bl-filter');
+  const items = [...S.formulas].sort((a, b) => a.name.localeCompare(b.name, 'it'));
+  const render = () => {
+    const f = filter.value.toLowerCase();
+    for (const li of ul.children) li.hidden = f && !li.dataset.t.includes(f);
+    const n = ul.querySelectorAll('input:checked').length; $('#bl-count').textContent = `${n} di ${items.length} schede selezionate`;
+    $('#bl-print').disabled = $('#bl-dl').disabled = n === 0;
+  };
+  ul.replaceChildren(...items.map(x => h('li', { 'data-t': `${x.code} ${x.name}`.toLowerCase() },
+    h('label', { class: 'nm' }, h('input', { type: 'checkbox', value: x.id, checked: true, onchange: render }), ' ', (x.code ? x.code + ' · ' : '') + x.name, h('small', { class: 'muted' }, ` v${x.version}`)))));
+  filter.value = ''; filter.oninput = render;
+  $('#bl-all').onclick = () => { ul.querySelectorAll('li:not([hidden]) input').forEach(i => { i.checked = true; }); render(); };
+  $('#bl-none').onclick = () => { ul.querySelectorAll('li:not([hidden]) input').forEach(i => { i.checked = false; }); render(); };
+  const opts = () => ({ ids: [...ul.querySelectorAll('input:checked')].map(i => Number(i.value)), size: $('#bl-size').value, cover: $('#bl-cover').checked, toc: $('#bl-toc').checked, attachments: $('#bl-att').checked });
+  $('#bl-print').onclick = () => { const o = opts(); exportSheets(o.ids, 'print', o); };
+  $('#bl-dl').onclick = () => { const o = opts(); exportSheets(o.ids, 'html', o); };
+  render(); $('#dlg-booklet').showModal();
+}
+$('#btn-booklet').onclick = openBooklet;
 
 async function dupFormula() { await flushSave(); const n = await api(`${qs()}/formulas/${S.current.id}/duplicate`, { method: 'POST' }); await loadFormulas(); await openFormula(n.id); }
 async function delFormula() { if (!confirm(`Eliminare “${S.current.name}” e i suoi allegati?`)) return; await api(`${qs()}/formulas/${S.current.id}`, { method: 'DELETE' }); dirty = false; S.current = null; sel[S.active] = null; await activate(S.active); }

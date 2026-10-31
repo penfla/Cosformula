@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDb, uploadsDir } from '../projects.js';
-import { ID_RE, str, validateUpload, httpError, MAX_MEDIA, MAX_PROJECT_BYTES, ALLOWED, extOf, STORED_RE, insideRoot } from '../security.js';
+import { ID_RE, cleanHtml, str, validateUpload, httpError, MAX_MEDIA, MAX_PROJECT_BYTES, ALLOWED, extOf, STORED_RE, insideRoot } from '../security.js';
 
 export const router = Router({ mergeParams: true });
 
@@ -64,7 +64,7 @@ router.post('/formulas/:fid/files', (req, res, next) => {
           used += f.size;
           const r = db.prepare('INSERT INTO files(formula_id,original_name,stored_name,mime,kind,size,sha256) VALUES(?,?,?,?,?,?,?)')
             .run(req.params.fid, orig, stored, v.mime, v.kind, f.size, digest);
-          created.push(db.prepare('SELECT id,original_name,mime,kind,size,caption,created_at FROM files WHERE id=?').get(r.lastInsertRowid));
+          created.push(db.prepare('SELECT id,original_name,stored_name,mime,kind,size,caption,created_at FROM files WHERE id=?').get(r.lastInsertRowid));
         } catch (e) { errors.push({ name: f.originalname, error: e.message }); }
       }
     } catch (e) { return next(e); }
@@ -80,8 +80,7 @@ function fileRow(req) {
   return row;
 }
 
-router.get('/files/:id/raw', (req, res) => {
-  const row = fileRow(req);
+function sendRaw(req, res, row) {
   const dir = uploadsDir(req.params.slug);
   const file = path.join(dir, row.stored_name);
   const ext = extOf(row.stored_name);
@@ -96,6 +95,15 @@ router.get('/files/:id/raw', (req, res) => {
     'Cache-Control': 'private, max-age=3600',
   });
   res.sendFile(file); // gestisce Range (video)
+}
+
+router.get('/files/:id/raw', (req, res) => sendRaw(req, res, fileRow(req)));
+// Accesso per nome file (stabile tra export/import): usato dagli allegati incorporati nel processo.
+router.get('/files/n/:name/raw', (req, res) => {
+  if (!STORED_RE.test(req.params.name)) throw httpError(400, 'Nome non valido');
+  const row = getDb(req.params.slug).prepare('SELECT * FROM files WHERE stored_name=?').get(req.params.name);
+  if (!row) throw httpError(404, 'File non trovato');
+  sendRaw(req, res, row);
 });
 
 router.patch('/files/:id', (req, res) => {
@@ -106,7 +114,14 @@ router.patch('/files/:id', (req, res) => {
 
 router.delete('/files/:id', (req, res) => {
   const row = fileRow(req);
-  getDb(req.params.slug).prepare('DELETE FROM files WHERE id=?').run(row.id);
+  const db = getDb(req.params.slug);
+  db.transaction(() => {
+    db.prepare('DELETE FROM files WHERE id=?').run(row.id);
+    // rimuove dal processo di ogni formula i riferimenti al file eliminato
+    const allowed = new Set(db.prepare('SELECT stored_name FROM files').all().map(r => r.stored_name));
+    for (const f of db.prepare('SELECT id, process_html FROM formulas WHERE process_html LIKE ?').all(`%${row.stored_name}%`))
+      db.prepare('UPDATE formulas SET process_html=? WHERE id=?').run(cleanHtml(f.process_html, allowed), f.id);
+  })();
   fs.rmSync(path.join(uploadsDir(req.params.slug), row.stored_name), { force: true });
   res.json({ ok: true });
 });

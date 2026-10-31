@@ -12,6 +12,8 @@ Modello di minaccia: app **locale, single-user, senza autenticazione**, bind `12
 | Path traversal | slug/id/nomi file | slug `^[a-z0-9-]{1,63}$`, id numerici, file su disco = UUID + estensione allowlist, `insideRoot` | test `..%2Fx` |
 | Upload | file eseguibili/travestiti | allowlist estensioni + magic bytes (`file-type`) / UTF-8 per testo; SVG/HTML/JS esclusi; limiti dimensione; quota progetto; serviti con `nosniff`, `Content-Type` fisso, CSP `sandbox`, `attachment` per i documenti | test `upload: allowlist` |
 | Import ZIP/JSON | zip-slip, zip-bomb, JSON ostile | nessuna estrazione per nome (regex + percorso generato), max 5000 voci, tetto byte, `validateEntrySizes`; schema validato, HTML ri-sanitizzato, file ri-validati | test round-trip + rifiuti |
+| Allegati nel processo | immagini/link esterni, tracking, riferimenti forgiati | `img`/`video` ammessi solo con `cosfile:<uuid.ext>` verificato contro i file del progetto (altri `src` eliminati); link solo http/https/mailto/`cosfile`; accesso per nome con regex UUID | test `allegati nel processo` |
+| Export/stampa | XSS nella pagina generata | tutto il testo è escapato; il processo è ri-sanitizzato prima del render; CSP `script-src 'self'` (solo `/print.js`); `ids`/`size` validati | test `stampa` (escape, ids non validi) |
 | Integrità INCI | stato "verificato" falsificabile | assegnato solo dal server dopo match esatto nel dataset | test CRUD |
 | SSRF | lookup live | solo `COSING_LIVE_URL` configurato dall'operatore, https, `redirect:'error'`, timeout 8 s | code review |
 | DoS | richieste/upload massivi | rate limit, limiti multer/JSON | — |
