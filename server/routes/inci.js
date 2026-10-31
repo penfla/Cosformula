@@ -14,7 +14,11 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { search, verify, status, live } from '../inci/cosing.js';
-import { str } from '../security.js';
+import multer from 'multer';
+import { str, httpError } from '../security.js';
+import { importCosingCsv, loadSeed } from '../inci/importer.js';
+
+const up = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 3 } });
 
 export const router = Router();
 router.use(rateLimit({ windowMs: 60_000, limit: 600 }));
@@ -27,4 +31,16 @@ router.get('/verify', async (req, res) => {
   const out = verify(name);
   if (req.query.live === '1') out.live = await live(name);
   res.json(out);
+});
+
+router.post('/dataset', (req, res, next) => {
+  up.single('file')(req, res, err => {
+    if (err) return next(err.code === 'LIMIT_FILE_SIZE' ? httpError(413, 'File troppo grande (max 100 MB)') : err);
+    try {
+      if (req.body?.seed === '1') { const n = loadSeed(); return res.json({ imported: n, ...status() }); }
+      if (!req.file) throw httpError(400, 'Nessun file');
+      const n = importCosingCsv(req.file.buffer, str(req.body?.label, 100) || str(req.file.originalname, 100));
+      res.json({ imported: n, ...status() });
+    } catch (e) { next(e); }
+  });
 });

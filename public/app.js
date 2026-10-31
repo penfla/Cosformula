@@ -326,6 +326,11 @@ const dl = u => { const a = h('a', { href: u }); document.body.append(a); a.clic
 $('#bk-all').onclick = () => dl('/api/export-all');
 $('#bk-json').onclick = async () => { if (S.active) { await flushSave(); dl(`/api/projects/${S.active}/export?format=json`); } };
 $('#bk-zip').onclick = async () => { if (S.active) { await flushSave(); dl(`/api/projects/${S.active}/export?format=zip`); } };
+$('#bk-cosing').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); fd.append('label', f.name); $('#bk-msg').textContent = 'Importazione dataset…';
+  try { const r = await api('/inci/dataset', { method: 'POST', body: fd }); $('#bk-msg').textContent = `Dataset caricato: ${r.imported} voci.`; await refreshBanner(); }
+  catch (err) { $('#bk-msg').textContent = 'Errore: ' + err.message; } e.target.value = '';
+};
 $('#bk-import').onchange = async e => {
   const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); $('#bk-msg').textContent = 'Importazione…';
   try { const r = await api('/import', { method: 'POST', body: fd }); $('#bk-msg').textContent = `Importati: ${r.imported.map(p => p.name).join(', ')}`; await loadProjects(); for (const p of r.imported) if (!S.open.includes(p.slug)) S.open.push(p.slug); await activate(r.imported[0].slug); }
@@ -339,12 +344,32 @@ async function refreshBanner() {
   try { S.inci = await api('/inci/status'); } catch { return; }
   if (!S.inci.loaded || /seed/i.test(S.inci.label || '')) {
     b.hidden = false; b.className = 'banner';
-    b.replaceChildren('Dataset INCI di esempio (', String(S.inci.count || 0), ' voci, non ufficiale). Per la verifica completa importa l’export CosIng: ',
-      h('a', { href: S.inci.links.dataset, target: '_blank', rel: 'noopener noreferrer' }, 'dataset UE'), ' → ', h('code', {}, 'npm run import-cosing -- file.csv'));
+    b.replaceChildren(S.inci.loaded ? `Dataset INCI di esempio (${S.inci.count} voci, non ufficiale). ` : 'Nessun dataset INCI caricato. ',
+      'Per la verifica completa carica l’export CosIng (', h('a', { href: S.inci.links.dataset, target: '_blank', rel: 'noopener noreferrer' }, 'dataset UE'), ') da ', h('strong', {}, 'Database → Carica dataset INCI'), '.');
   } else b.hidden = true;
 }
 
+async function runSetup() {
+  const d = $('#dlg-setup'), form = $('#setup-form'), msg = $('#setup-msg'), csv = $('#setup-csv');
+  d.addEventListener('cancel', e => e.preventDefault()); // non chiudibile con Esc
+  form.querySelectorAll('input[name=ds]').forEach(r => r.addEventListener('change', () => { csv.hidden = form.ds.value !== 'csv'; }));
+  d.showModal();
+  await new Promise(resolve => form.addEventListener('submit', async ev => {
+    ev.preventDefault(); const go = $('#setup-go'); msg.textContent = '';
+    const ds = form.ds.value;
+    if (ds === 'csv' && !csv.files[0]) { msg.textContent = 'Seleziona il file CSV CosIng.'; return; }
+    go.disabled = true; go.textContent = 'Creazione in corso…';
+    try {
+      if (ds === 'csv') { const fd = new FormData(); fd.append('file', csv.files[0]); fd.append('label', csv.files[0].name); await api('/inci/dataset', { method: 'POST', body: fd }); }
+      await api('/setup', { method: 'POST', body: { projectName: $('#setup-name').value, dataset: ds === 'seed' ? 'seed' : 'none', example: $('#setup-example').checked } });
+      d.close(); resolve();
+    } catch (err) { msg.textContent = err.message; go.disabled = false; go.textContent = 'Crea database e inizia'; }
+  }));
+}
+
 (async function init() {
+  const setup = await api('/setup/status').catch(() => ({ initialized: true }));
+  if (!setup.initialized) { try { localStorage.removeItem('cosf.state'); } catch { /* */ } await runSetup(); }
   const st = store.get(); Object.assign(sel, st.sel || {});
   await loadProjects(); await refreshBanner();
   S.open = (st.open || []).filter(s => S.projects.some(p => p.slug === s));

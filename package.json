@@ -9,9 +9,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server/index.js",
+    "start": "node server/index.js --open",
     "test": "node --test test/*.test.js",
-    "import-cosing": "node scripts/import-cosing.js"
+    "import-cosing": "node scripts/import-cosing.js",
+    "serve": "node server/index.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

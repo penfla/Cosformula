@@ -16,7 +16,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listProjects, createProject, renameProject, deleteProject, getDb } from './projects.js';
 import { SLUG_RE, httpError, str } from './security.js';
@@ -24,7 +24,7 @@ import { router as formulas } from './routes/formulas.js';
 import { router as files } from './routes/files.js';
 import { router as inci } from './routes/inci.js';
 import { router as backup } from './routes/backup.js';
-import { COSING_DB } from './inci/cosing.js';
+import { router as setup } from './routes/setup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -70,6 +70,7 @@ export function createApp({ port = 3000, host = '127.0.0.1' } = {}) {
   api.get('/projects/:slug', (q, r) => { getDb(q.params.slug); r.json(listProjects().find(p => p.slug === q.params.slug)); });
   api.use('/projects/:slug/formulas', formulas);
   api.use('/projects/:slug', files);
+  api.use('/setup', setup);
   api.use('/inci', inci);
   api.use('/', backup);
   app.use('/api', api);
@@ -88,12 +89,28 @@ export function createApp({ port = 3000, host = '127.0.0.1' } = {}) {
   return app;
 }
 
+function openBrowser(url) {
+  try {
+    const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+    const c = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    c.on('error', () => {}); c.unref();
+  } catch { /* browser non disponibile: l'URL è stampato in console */ }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!fs.existsSync(COSING_DB)) {
-    // Seed minimale NON ufficiale: sostituire con l'export completo CosIng (vedi README).
-    execFileSync(process.execPath, [path.join(root, 'scripts/import-cosing.js'), path.join(root, 'data/cosing-seed.csv'), '--label', 'SEED-MINIMALE (non ufficiale)'], { stdio: 'inherit', env: process.env });
-  }
-  const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '127.0.0.1';
-  createApp({ port }).listen(port, host, () => console.log(`Cosformula su http://${host}:${port}`));
+  const first = Number(process.env.PORT) || 3000;
+  const tryListen = port => {
+    const server = createApp({ port }).listen(port, host);
+    server.once('listening', () => {
+      const url = `http://localhost:${port}`;
+      console.log(`\nCosformula pronto su ${url}  (Ctrl+C per chiudere)\n`);
+      if (process.argv.includes('--open')) openBrowser(url);
+    });
+    server.once('error', e => {
+      if (e.code === 'EADDRINUSE' && !process.env.PORT && port < first + 20) { console.log(`Porta ${port} occupata, provo ${port + 1}…`); tryListen(port + 1); }
+      else { console.error(e.code === 'EADDRINUSE' ? `Porta ${port} occupata (PORT=...)` : e); process.exit(1); }
+    });
+  };
+  tryListen(first);
 }

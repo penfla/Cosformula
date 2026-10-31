@@ -2,21 +2,28 @@
 
 Webapp **locale** per raccogliere formulazioni cosmetiche: una scheda per formula (tabella ingredienti con % / g modificabili, INCI verificabile su dataset CosIng, processo in rich text, allegati foto/video/documenti), più progetti apribili nella stessa sessione, backup JSON/ZIP.
 
-## Avvio
-```bash
-npm install
-npm start          # http://localhost:3000  (bind 127.0.0.1)
-npm test           # 8 test API/sicurezza
-```
-Dati in `data/projects/<slug>/project.db` (SQLite, 1 file = 1 progetto) e `data/projects/<slug>/uploads/`.
+## Avvio rapido (ready to use)
+Requisito unico: **Node.js ≥ 20** (https://nodejs.org/). Poi:
+
+| Sistema | Azione |
+|---|---|
+| Windows | doppio clic su `start.bat` |
+| macOS | doppio clic su `start.command` (la prima volta: tasto destro → Apri) |
+| Linux / terminale | `./start.sh` oppure `npm install && npm start` |
+
+Lo script installa le dipendenze al primo avvio, avvia il server e **apre il browser**. Al **primo avvio compare una procedura guidata** nella pagina web che:
+1. crea il database (primo progetto, file SQLite in `data/projects/<slug>/project.db`);
+2. carica il dataset INCI: esempio immediato (non ufficiale) oppure il CSV ufficiale CosIng da file;
+3. opzionalmente inserisce una formula di esempio (valori indicativi, non validati).
+
+Se la porta 3000 è occupata viene usata la successiva (3001…). Per chiudere: Ctrl+C nella finestra del terminale.
+`npm test` esegue i 10 test API/sicurezza (richiede `npm install` completo, con le devDependencies).
+Dati in `data/` (da includere nei backup): `data/projects/…`, `data/cosing.db`, `data/config.json`.
 Variabili: `PORT`, `HOST`, `COSFORMULA_DATA` (cartella dati), `COSFORMULA_ALLOWED_HOSTS` (host extra, separati da virgola), `COSING_LIVE_URL` (vedi sotto).
 
 ## Verifica INCI (fonti ufficiali)
-- Al primo avvio viene caricato un **seed minimale NON ufficiale** (148 nomi INCI comuni, `data/cosing-seed.csv`); l'interfaccia mostra un avviso finché non si importa il dataset completo.
-- Dataset completo: scarica il CSV "COSING Ingredients – Fragrance Inventory" da https://data.europa.eu/data/datasets/cosmetic-ingredient-database-ingredients-and-fragrance-inventory (portale: https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic-ingredient-database_en), poi:
-  ```bash
-  npm run import-cosing -- percorso/COSING.csv --label "CosIng 2026-10"
-  ```
+- Nella procedura guidata si può scegliere un **seed minimale NON ufficiale** (148 nomi INCI comuni, `data/cosing-seed.csv`); l'interfaccia mostra un avviso finché non si importa il dataset completo.
+- Dataset completo: scarica il CSV "COSING Ingredients – Fragrance Inventory" da https://data.europa.eu/data/datasets/cosmetic-ingredient-database-ingredients-and-fragrance-inventory (portale: https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic-ingredient-database_en), poi caricalo da **Database → Carica dataset INCI CosIng (CSV)** (o, da terminale: `npm run import-cosing -- percorso/COSING.csv`).
 - Stato **✔ verificato** = corrispondenza esatta (case-insensitive) con una voce del dataset; assegnato **solo dal server**. **⚠ da verificare** = INCI libero. **∅ senza INCI** = ammesso.
 - Lookup online opzionale: l'endpoint live di CosIng non è documentato come API pubblica stabile; impostare `COSING_LIVE_URL` (https, con `{q}` come segnaposto) per attivarlo. Senza, il popup di verifica offre i link ufficiali (CosIng, dataset UE, Reg. CE 1223/2009: https://eur-lex.europa.eu/eli/reg/2009/1223/oj).
 

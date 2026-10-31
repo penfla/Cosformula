@@ -35,7 +35,7 @@ export function loadFormula(db, id) {
   return f;
 }
 
-function writeIngredients(db, id, list) {
+export function writeIngredients(db, id, list) {
   if (!Array.isArray(list) || list.length > 500) throw httpError(400, 'Ingredienti non validi');
   db.prepare('DELETE FROM ingredients WHERE formula_id=?').run(id);
   const ins = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note)

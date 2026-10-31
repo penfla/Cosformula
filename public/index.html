@@ -49,6 +49,7 @@ AI disclosure: questo strumento esegue calcoli deterministici; non genera conten
     <button type="button" id="bk-all" class="btn">Esporta tutti i progetti (ZIP)</button>
     <button type="button" id="bk-json" class="btn">Esporta progetto attivo (JSON)</button>
     <button type="button" id="bk-zip" class="btn">Esporta progetto attivo (ZIP con allegati)</button>
+    <label class="btn filebtn">Carica dataset INCI CosIng (CSV)…<input id="bk-cosing" type="file" accept=".csv,text/csv" hidden></label>
     <label class="btn filebtn">Importa JSON/ZIP…<input id="bk-import" type="file" accept=".json,.zip" hidden></label>
   </div>
   <p id="bk-msg" class="muted" role="status"></p>
@@ -75,6 +76,21 @@ CosIng — https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic
 AI disclosure: questo strumento esegue calcoli deterministici;
 non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).</pre>
 <div class="row end"><button class="btn">Chiudi</button></div></form></dialog>
+<dialog id="dlg-setup"><form id="setup-form" method="dialog">
+  <h2>Benvenuto in Cosformula</h2>
+  <p>Primo avvio: crea il tuo database locale. I dati restano sul tuo computer, nella cartella <code>data/</code>.</p>
+  <label class="fld">Nome del primo progetto (raccolta di formule)<input id="setup-name" value="Le mie formulazioni" maxlength="100" required></label>
+  <fieldset class="fs"><legend>Dataset INCI per la verifica (CosIng)</legend>
+    <label><input type="radio" name="ds" value="seed" checked> Dataset di esempio (148 nomi comuni, <strong>non ufficiale</strong>) — subito pronto</label>
+    <label><input type="radio" name="ds" value="csv"> Carica il CSV ufficiale CosIng
+      (<a href="https://data.europa.eu/data/datasets/cosmetic-ingredient-database-ingredients-and-fragrance-inventory" target="_blank" rel="noopener noreferrer">dataset UE</a>)</label>
+    <input id="setup-csv" type="file" accept=".csv,text/csv" hidden>
+    <label><input type="radio" name="ds" value="none"> Salta (configurabile dopo da “Database”)</label>
+  </fieldset>
+  <label><input type="checkbox" id="setup-example" checked> Includi una formula di esempio (valori indicativi, non validati)</label>
+  <p id="setup-msg" class="warn" role="alert"></p>
+  <div class="row end"><button id="setup-go" class="btn primary">Crea database e inizia</button></div>
+</form></dialog>
 <dialog id="dlg-prompt"><form method="dialog"><h2 id="prompt-title"></h2><input id="prompt-input" maxlength="100" autocomplete="off"><div class="row end"><button value="cancel" class="btn">Annulla</button><button value="ok" class="btn primary">OK</button></div></form></dialog>
 <div id="inci-pop" class="pop" hidden role="dialog" aria-label="Verifica INCI"></div>
 <div id="ac" class="ac" hidden role="listbox"></div>
