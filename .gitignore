@@ -1,0 +1,5 @@
+node_modules/
+data/projects/
+data/cosing.db
+data/cosing.db-*
+*.log

@@ -1,0 +1,85 @@
+<!--
+License-Identifier: PolyForm-Noncommercial-1.0.0
+Copyright (c) 2026 Flavio Pendolino
+https://polyformproject.org/licenses/noncommercial/1.0.0
+
+Author: Flavio Pendolino
+Version: 0.1.0
+License: PolyForm Noncommercial 1.0.0
+Commercial use: penfla@me.com
+Purpose: Cosformula - archivio locale di formulazioni cosmetiche
+Method: Node.js + SQLite; verifica INCI su dataset CosIng locale
+Disclaimer: validate the results against your own reference samples before any analytical, engineering, safety or regulatory use.
+AI disclosure: questo strumento esegue calcoli deterministici; non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).
+-->
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cosformula</title>
+<link rel="stylesheet" href="/vendor/quill/quill.snow.css">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <strong class="brand">Cosformula</strong>
+  <nav id="tabs" class="tabs" aria-label="Progetti aperti"></nav>
+  <div class="spacer"></div>
+  <button id="btn-new-project" class="btn">+ Nuovo progetto</button>
+  <button id="btn-open-project" class="btn">Apri progetto…</button>
+  <button id="btn-backup" class="btn">Database</button>
+  <button id="btn-info" class="btn" aria-label="Informazioni">ⓘ</button>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main class="layout">
+  <aside class="sidebar">
+    <div class="side-head"><span id="project-title">—</span><button id="btn-new-formula" class="btn small primary">+ Formula</button></div>
+    <input id="formula-filter" type="search" placeholder="Filtra formule…" aria-label="Filtra formule">
+    <ul id="formula-list" class="flist"></ul>
+  </aside>
+  <section id="sheet" class="sheet"><p class="empty">Crea o apri un progetto per iniziare.</p></section>
+</main>
+<footer class="foot">© 2026 Flavio Pendolino | <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial 1.0.0</a></footer>
+
+<dialog id="dlg-projects"><form method="dialog"><h2>Progetti</h2><ul id="project-list" class="plist"></ul><div class="row end"><button class="btn">Chiudi</button></div></form></dialog>
+<dialog id="dlg-backup"><form method="dialog"><h2>Database</h2>
+  <p>Esporta o importa le formulazioni. Lo ZIP include gli allegati; il JSON solo i dati.</p>
+  <div class="stack">
+    <button type="button" id="bk-all" class="btn">Esporta tutti i progetti (ZIP)</button>
+    <button type="button" id="bk-json" class="btn">Esporta progetto attivo (JSON)</button>
+    <button type="button" id="bk-zip" class="btn">Esporta progetto attivo (ZIP con allegati)</button>
+    <label class="btn filebtn">Importa JSON/ZIP…<input id="bk-import" type="file" accept=".json,.zip" hidden></label>
+  </div>
+  <p id="bk-msg" class="muted" role="status"></p>
+  <div class="row end"><button class="btn">Chiudi</button></div></form></dialog>
+<dialog id="dlg-info"><form method="dialog"><h2>Informazioni</h2>
+<pre class="infobox">License-Identifier: PolyForm-Noncommercial-1.0.0
+Copyright (c) 2026 Flavio Pendolino
+https://polyformproject.org/licenses/noncommercial/1.0.0
+
+Author: Flavio Pendolino
+Version: 0.1.0
+License: PolyForm Noncommercial 1.0.0
+Commercial use: penfla@me.com
+Purpose: archivio locale di formulazioni cosmetiche (formule, INCI, processo, allegati).
+Method: Node.js + SQLite (un file .db per progetto); verifica INCI su dataset CosIng
+        importato localmente; nessuna chiamata a modelli generativi.
+Disclaimer: validate the results against your own reference samples before any
+analytical, engineering, safety or regulatory use.
+Third-party components: express, better-sqlite3, multer, file-type, sanitize-html, helmet,
+yazl, yauzl, csv-parse, Quill (BSD-3), DOMPurify (MPL-2.0/Apache-2.0).
+Scientific references: Reg. (CE) 1223/2009 — https://eur-lex.europa.eu/eli/reg/2009/1223/oj
+CosIng — https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic-ingredient-database_en
+
+AI disclosure: questo strumento esegue calcoli deterministici;
+non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).</pre>
+<div class="row end"><button class="btn">Chiudi</button></div></form></dialog>
+<dialog id="dlg-prompt"><form method="dialog"><h2 id="prompt-title"></h2><input id="prompt-input" maxlength="100" autocomplete="off"><div class="row end"><button value="cancel" class="btn">Annulla</button><button value="ok" class="btn primary">OK</button></div></form></dialog>
+<div id="inci-pop" class="pop" hidden role="dialog" aria-label="Verifica INCI"></div>
+<div id="ac" class="ac" hidden role="listbox"></div>
+<script src="/vendor/dompurify/purify.min.js"></script>
+<script src="/vendor/quill/quill.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

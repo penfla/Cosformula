@@ -1,0 +1,33 @@
+{
+  "name": "cosformula",
+  "version": "0.1.0",
+  "description": "Webapp locale per raccogliere formulazioni cosmetiche",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js",
+    "import-cosing": "node scripts/import-cosing.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "csv-parse": "^7.0.3",
+    "dompurify": "^3.4.17",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.2",
+    "file-type": "^22.3.0",
+    "helmet": "^8.3.0",
+    "multer": "^2.5.0",
+    "quill": "^2.0.3",
+    "sanitize-html": "^2.18.1",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.1"
+  }
+}
