@@ -22,6 +22,8 @@ import { pipeline } from 'node:stream/promises';
 import { DATA_DIR, getDb, listProjects, createProject, deleteProject, uploadsDir } from '../projects.js';
 import { projectName } from '../db.js';
 import { str, num, cleanHtml, validateUpload, httpError, STORED_RE, SLUG_RE } from '../security.js';
+import { cleanMaterial, FIELDS as MAT_FIELDS } from './materials.js';
+import { cleanPifData, SECTION_KEYS } from '../pifctx.js';
 
 export const router = Router();
 const TMP = path.join(DATA_DIR, '.import-tmp');
@@ -35,21 +37,31 @@ const upload = multer({
   limits: { fileSize: MAX_IMPORT, files: 1, fields: 3 },
 });
 
+const DOC_FIELDS = 'doc_type,doc_date,revision,language,original_name,stored_name,mime,kind,size,sha256,caption';
 export function exportData(slug) {
   const db = getDb(slug);
-  const formulas = db.prepare('SELECT * FROM formulas ORDER BY id').all().map(f => ({
-    code: f.code, name: f.name, version: f.version, batch_g: f.batch_g, notes: f.notes, process_html: f.process_html,
-    created_at: f.created_at, updated_at: f.updated_at,
-    ingredients: db.prepare('SELECT trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note FROM ingredients WHERE formula_id=? ORDER BY position,id').all(f.id),
-    files: db.prepare('SELECT original_name,stored_name,mime,kind,size,sha256,caption FROM files WHERE formula_id=? ORDER BY id').all(f.id),
-  }));
-  return { format: 'cosformula-project', version: 1, exported_at: new Date().toISOString(), project: { name: projectName(db) }, formulas };
+  const materials = db.prepare('SELECT * FROM materials ORDER BY id').all();
+  const idx = new Map(materials.map((m, k) => [m.id, k]));
+  const parse = t => { try { return JSON.parse(t); } catch { return {}; } };
+  const formulas = db.prepare('SELECT * FROM formulas ORDER BY id').all().map(f => {
+    const p = db.prepare('SELECT data, sections FROM pif WHERE formula_id=?').get(f.id);
+    return {
+      code: f.code, name: f.name, version: f.version, batch_g: f.batch_g, notes: f.notes, process_html: f.process_html,
+      created_at: f.created_at, updated_at: f.updated_at,
+      ingredients: db.prepare('SELECT trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note,material_id FROM ingredients WHERE formula_id=? ORDER BY position,id').all(f.id)
+        .map(({ material_id, ...i }) => ({ ...i, material: idx.has(material_id) ? idx.get(material_id) : null })),
+      files: db.prepare('SELECT original_name,stored_name,mime,kind,size,sha256,caption FROM files WHERE formula_id=? ORDER BY id').all(f.id),
+      pif: p ? { data: parse(p.data), sections: parse(p.sections) } : null,
+    };
+  });
+  return { format: 'cosformula-project', version: 2, exported_at: new Date().toISOString(), project: { name: projectName(db) }, formulas,
+    materials: materials.map(m => ({ ...Object.fromEntries(MAT_FIELDS.map(k => [k, m[k]])), docs: db.prepare(`SELECT ${DOC_FIELDS} FROM files WHERE material_id=? ORDER BY id`).all(m.id) })) };
 }
 
 function addProject(zip, slug, prefix) {
   const data = exportData(slug);
   zip.addBuffer(Buffer.from(JSON.stringify(data, null, 2)), `${prefix}project.json`);
-  for (const f of data.formulas) for (const file of f.files) {
+  for (const file of [...data.formulas.flatMap(f => f.files), ...data.materials.flatMap(m => m.docs)]) {
     const p = path.join(uploadsDir(slug), file.stored_name);
     if (STORED_RE.test(file.stored_name) && fs.existsSync(p)) zip.addFile(p, `${prefix}files/${file.stored_name}`, { compress: false });
   }
@@ -110,35 +122,53 @@ function extractZip(zipPath, outDir) {
 }
 
 async function importOne(data, files, fallbackName) {
-  if (!data || data.format !== 'cosformula-project' || data.version !== 1 || !Array.isArray(data.formulas) || data.formulas.length > 5000)
+  if (!data || data.format !== 'cosformula-project' || ![1, 2].includes(data.version) || !Array.isArray(data.formulas) || data.formulas.length > 5000)
     throw httpError(400, 'Formato progetto non riconosciuto');
+  const mats = Array.isArray(data.materials) ? data.materials.slice(0, 5000) : [];
   const proj = createProject(str(data.project?.name, 100) || fallbackName);
   try {
     const dir = uploadsDir(proj.slug);
     const db = getDb(proj.slug);
-    const prepared = [];
     const remap = new Map(); // vecchio stored_name -> nuovo
+    const ingest = async file => {
+      const src = files?.get(String(file?.stored_name));
+      if (!src || !STORED_RE.test(String(file.stored_name))) return null;
+      const size = fs.statSync(src).size;
+      const v = await validateUpload(src, String(file.stored_name), size);
+      const stored = `${crypto.randomUUID()}.${v.ext}`;
+      fs.copyFileSync(src, path.join(dir, stored));
+      const sha = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
+      remap.set(String(file.stored_name), stored);
+      return { original_name: str(file.original_name, 200) || stored, stored, mime: v.mime, kind: v.kind, size, sha, caption: str(file.caption, 500),
+        doc_type: ['SDS', 'TDS', 'COA', 'OTHER'].includes(file.doc_type) ? file.doc_type : '', doc_date: /^\d{4}-\d{2}-\d{2}$/.test(file.doc_date || '') ? file.doc_date : '',
+        revision: str(file.revision, 40), language: str(file.language, 20) };
+    };
+    const preparedMats = [];
+    for (const m of mats) {
+      const docs = [];
+      for (const d of Array.isArray(m.docs) ? m.docs.slice(0, 200) : []) { const x = await ingest(d); if (x) docs.push(x); }
+      preparedMats.push([cleanMaterial(m), docs]);
+    }
+    const prepared = [];
     for (const f of data.formulas) {
       const fl = [];
-      for (const file of Array.isArray(f.files) ? f.files.slice(0, 500) : []) {
-        const src = files?.get(String(file?.stored_name));
-        if (!src || !STORED_RE.test(String(file.stored_name))) continue;
-        const size = fs.statSync(src).size;
-        const v = await validateUpload(src, String(file.stored_name), size);
-        const stored = `${crypto.randomUUID()}.${v.ext}`;
-        fs.copyFileSync(src, path.join(dir, stored));
-        const sha = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
-        remap.set(String(file.stored_name), stored);
-        fl.push({ original_name: str(file.original_name, 200) || stored, stored, mime: v.mime, kind: v.kind, size, sha, caption: str(file.caption, 500) });
-      }
+      for (const file of Array.isArray(f.files) ? f.files.slice(0, 500) : []) { const x = await ingest(file); if (x) fl.push(x); }
       prepared.push([f, fl]);
     }
+    const insM = db.prepare(`INSERT INTO materials(${MAT_FIELDS.join(',')}) VALUES(${MAT_FIELDS.map(() => '?').join(',')})`);
     const insF = db.prepare('INSERT INTO formulas(code,name,version,batch_g,notes,process_html,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
-    const insI = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insI = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note,material_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const insFile = db.prepare('INSERT INTO files(formula_id,original_name,stored_name,mime,kind,size,sha256,caption) VALUES(?,?,?,?,?,?,?,?)');
+    const insDoc = db.prepare('INSERT INTO files(material_id,doc_type,doc_date,revision,language,original_name,stored_name,mime,kind,size,sha256,caption) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+    const insPif = db.prepare('INSERT INTO pif(formula_id,data,sections) VALUES(?,?,?)');
     const allowed = new Set(remap.values());
     const fixRefs = html => { let h = String(html ?? ''); for (const [o, n] of remap) h = h.split(`cosfile:${o}`).join(`cosfile:${n}`); return cleanHtml(h, allowed); };
     db.transaction(() => {
+      const matIds = preparedMats.map(([m, docs]) => {
+        const id = insM.run(...MAT_FIELDS.map(k => m[k])).lastInsertRowid;
+        for (const x of docs) insDoc.run(id, x.doc_type, x.doc_date, x.revision, x.language, x.original_name, x.stored, x.mime, x.kind, x.size, x.sha, x.caption);
+        return id;
+      });
       for (const [f, fl] of prepared) {
         const id = insF.run(str(f.code, 40), str(f.name, 200) || 'Senza nome', str(f.version, 20), num(f.batch_g), str(f.notes, 5000),
           fixRefs(f.process_html), str(f.created_at, 30) || new Date().toISOString(), str(f.updated_at, 30) || new Date().toISOString()).lastInsertRowid;
@@ -146,10 +176,16 @@ async function importOne(data, files, fallbackName) {
           const inci = str(i?.inci, 300);
           let st = ['verified', 'unverified', 'none'].includes(i?.inci_status) ? i.inci_status : 'unverified';
           if (!inci) st = 'none'; else if (st === 'none') st = 'unverified';
+          const mi = Number.isInteger(i?.material) ? matIds[i.material] ?? null : null;
           insI.run(id, pos, str(i?.trade_name, 200), inci, st, st === 'verified' ? str(i?.cosing_ref, 40) : '', str(i?.phase, 20),
-            str(i?.function, 200), num(i?.percent), num(i?.grams), str(i?.supplier, 200), str(i?.note, 1000));
+            str(i?.function, 200), num(i?.percent), num(i?.grams), str(i?.supplier, 200), str(i?.note, 1000), mi);
         });
         for (const x of fl) insFile.run(id, x.original_name, x.stored, x.mime, x.kind, x.size, x.sha, x.caption);
+        if (f.pif && typeof f.pif === 'object') {
+          const secs = {};
+          for (const [k, v] of Object.entries(f.pif.sections || {})) if (SECTION_KEYS.has(k)) secs[k] = fixRefs(v);
+          insPif.run(id, JSON.stringify(cleanPifData(f.pif.data || {})), JSON.stringify(secs));
+        }
       }
     })();
     return proj;

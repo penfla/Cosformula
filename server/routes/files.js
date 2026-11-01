@@ -32,7 +32,7 @@ const upload = multer({
     },
     filename: (_r, _f, cb) => cb(null, crypto.randomUUID() + '.part'),
   }),
-  limits: { fileSize: MAX_MEDIA, files: 20, fields: 5, parts: 30 },
+  limits: { fileSize: MAX_MEDIA, files: 20, fields: 8, parts: 32 },
 });
 
 function sha256(file) {
@@ -42,36 +42,49 @@ function sha256(file) {
   });
 }
 
-router.post('/formulas/:fid/files', (req, res, next) => {
-  if (!ID_RE.test(req.params.fid)) return next(httpError(400, 'ID non valido'));
-  getDb(req.params.slug); // 404 early
-  upload.array('files', 20)(req, res, async err => {
-    if (err) return next(err.code === 'LIMIT_FILE_SIZE' ? httpError(413, 'File troppo grande') : err);
-    const db = getDb(req.params.slug);
-    const created = [], errors = [];
-    const dir = uploadsDir(req.params.slug);
-    try {
-      if (!db.prepare('SELECT 1 FROM formulas WHERE id=?').get(req.params.fid)) throw httpError(404, 'Formula non trovata');
-      let used = db.prepare('SELECT COALESCE(SUM(size),0) s FROM files').get().s;
-      for (const f of req.files || []) {
-        try {
-          const orig = path.basename(f.originalname).slice(0, 200);
-          const v = await validateUpload(f.path, orig, f.size);
-          if (used + f.size > MAX_PROJECT_BYTES) throw httpError(413, 'Quota progetto superata');
-          const stored = `${crypto.randomUUID()}.${v.ext}`;
-          const digest = await sha256(f.path);
-          fs.renameSync(f.path, path.join(dir, stored));
-          used += f.size;
-          const r = db.prepare('INSERT INTO files(formula_id,original_name,stored_name,mime,kind,size,sha256) VALUES(?,?,?,?,?,?,?)')
-            .run(req.params.fid, orig, stored, v.mime, v.kind, f.size, digest);
-          created.push(db.prepare('SELECT id,original_name,stored_name,mime,kind,size,caption,created_at FROM files WHERE id=?').get(r.lastInsertRowid));
-        } catch (e) { errors.push({ name: f.originalname, error: e.message }); }
-      }
-    } catch (e) { return next(e); }
-    finally { for (const f of req.files || []) fs.rmSync(f.path, { force: true }); }
-    res.status(created.length ? 201 : 400).json({ created, errors });
-  });
-});
+const DOC_TYPES = new Set(['', 'SDS', 'TDS', 'COA', 'OTHER']);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const FILE_COLS = 'id,formula_id,material_id,doc_type,doc_date,revision,language,original_name,stored_name,mime,kind,size,caption,created_at';
+
+/** owner: 'formula' | 'material' — il file appartiene a una scheda formula oppure a una materia prima (SDS/TDS/CoA…). */
+function uploadHandler(owner) {
+  const [table, col, param] = owner === 'material' ? ['materials', 'material_id', 'mid'] : ['formulas', 'formula_id', 'fid'];
+  return (req, res, next) => {
+    if (!ID_RE.test(req.params[param])) return next(httpError(400, 'ID non valido'));
+    getDb(req.params.slug); // 404 early
+    upload.array('files', 20)(req, res, async err => {
+      if (err) return next(err.code === 'LIMIT_FILE_SIZE' ? httpError(413, 'File troppo grande') : err);
+      const db = getDb(req.params.slug);
+      const created = [], errors = [];
+      const dir = uploadsDir(req.params.slug);
+      const b = req.body || {};
+      const docType = owner === 'material' && DOC_TYPES.has(b.doc_type) ? b.doc_type : '';
+      const docDate = DATE_RE.test(b.doc_date || '') ? b.doc_date : '';
+      try {
+        if (!db.prepare(`SELECT 1 FROM ${table} WHERE id=?`).get(req.params[param])) throw httpError(404, 'Elemento non trovato');
+        let used = db.prepare('SELECT COALESCE(SUM(size),0) s FROM files').get().s;
+        for (const f of req.files || []) {
+          try {
+            const orig = path.basename(f.originalname).slice(0, 200);
+            const v = await validateUpload(f.path, orig, f.size);
+            if (used + f.size > MAX_PROJECT_BYTES) throw httpError(413, 'Quota progetto superata');
+            const stored = `${crypto.randomUUID()}.${v.ext}`;
+            const digest = await sha256(f.path);
+            fs.renameSync(f.path, path.join(dir, stored));
+            used += f.size;
+            const r = db.prepare(`INSERT INTO files(${col},doc_type,doc_date,revision,language,original_name,stored_name,mime,kind,size,sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+              .run(req.params[param], docType, docDate, str(b.revision, 40), str(b.language, 20), orig, stored, v.mime, v.kind, f.size, digest);
+            created.push(db.prepare(`SELECT ${FILE_COLS} FROM files WHERE id=?`).get(r.lastInsertRowid));
+          } catch (e) { errors.push({ name: f.originalname, error: e.message }); }
+        }
+      } catch (e) { return next(e); }
+      finally { for (const f of req.files || []) fs.rmSync(f.path, { force: true }); }
+      res.status(created.length ? 201 : 400).json({ created, errors });
+    });
+  };
+}
+router.post('/formulas/:fid/files', uploadHandler('formula'));
+router.post('/materials/:mid/files', uploadHandler('material'));
 
 function fileRow(req) {
   if (!ID_RE.test(req.params.id)) throw httpError(400, 'ID non valido');
@@ -107,8 +120,14 @@ router.get('/files/n/:name/raw', (req, res) => {
 });
 
 router.patch('/files/:id', (req, res) => {
-  const row = fileRow(req);
-  getDb(req.params.slug).prepare('UPDATE files SET caption=? WHERE id=?').run(str(req.body?.caption, 500), row.id);
+  const row = fileRow(req), b = req.body || {};
+  const db = getDb(req.params.slug);
+  db.prepare('UPDATE files SET caption=?, doc_type=?, doc_date=?, revision=?, language=? WHERE id=?').run(
+    b.caption !== undefined ? str(b.caption, 500) : row.caption,
+    row.material_id && DOC_TYPES.has(b.doc_type) ? b.doc_type : row.doc_type,
+    b.doc_date !== undefined ? (DATE_RE.test(b.doc_date) ? b.doc_date : '') : row.doc_date,
+    b.revision !== undefined ? str(b.revision, 40) : row.revision,
+    b.language !== undefined ? str(b.language, 20) : row.language, row.id);
   res.json({ ok: true });
 });
 

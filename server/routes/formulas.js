@@ -38,8 +38,9 @@ export function loadFormula(db, id) {
 export function writeIngredients(db, id, list) {
   if (!Array.isArray(list) || list.length > 500) throw httpError(400, 'Ingredienti non validi');
   db.prepare('DELETE FROM ingredients WHERE formula_id=?').run(id);
-  const ins = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO ingredients(formula_id,position,trade_name,inci,inci_status,cosing_ref,phase,function,percent,grams,supplier,note,material_id)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const matOk = db.prepare('SELECT 1 FROM materials WHERE id=?');
   list.forEach((i, pos) => {
     const inci = str(i.inci, 300);
     let status = STATUS.has(i.inci_status) ? i.inci_status : 'unverified';
@@ -52,7 +53,8 @@ export function writeIngredients(db, id, list) {
       if (m) ref = m.ref || ''; else status = 'unverified';
     }
     ins.run(id, pos, str(i.trade_name, 200), inci, status, ref,
-      str(i.phase, 20), str(i.function, 200), num(i.percent), num(i.grams), str(i.supplier, 200), str(i.note, 1000));
+      str(i.phase, 20), str(i.function, 200), num(i.percent), num(i.grams), str(i.supplier, 200), str(i.note, 1000),
+      ID_RE.test(String(i.material_id)) && matOk.get(Number(i.material_id)) ? Number(i.material_id) : null);
   });
 }
 

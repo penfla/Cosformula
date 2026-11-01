@@ -12,7 +12,7 @@
 // AI disclosure: questo strumento esegue calcoli deterministici; non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).
 
 import { Router } from 'express';
-import { renderDocument } from '../print.js';
+import { renderDocument, renderPif } from '../print.js';
 import { getDb } from '../projects.js';
 import { ID_RE, SLUG_RE, httpError } from '../security.js';
 
@@ -35,5 +35,17 @@ router.get('/projects/:slug/print', (req, res) => {
   });
   res.set('Content-Type', 'text/html; charset=utf-8');
   if (download) res.set('Content-Disposition', `attachment; filename="${SLUG_RE.test(slug) ? slug : 'cosformula'}-${ids === 'all' || ids.length > 1 ? 'booklet' : 'scheda-' + ids[0]}.html"`);
+  res.send(html);
+});
+
+// GET /api/projects/:slug/formulas/:fid/pif/print?size=A4[&download=1]
+router.get('/projects/:slug/formulas/:fid/pif/print', (req, res) => {
+  const slug = req.params.slug;
+  getDb(slug);
+  if (!ID_RE.test(req.params.fid)) throw httpError(400, 'ID non valido');
+  const download = req.query.download === '1';
+  const html = renderPif(slug, Number(req.params.fid), { size: String(req.query.size || 'A4'), embed: download, download });
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  if (download) res.set('Content-Disposition', `attachment; filename="${SLUG_RE.test(slug) ? slug : 'cosformula'}-pif-${req.params.fid}.html"`);
   res.send(html);
 });

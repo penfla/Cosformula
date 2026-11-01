@@ -11,6 +11,21 @@
 // Disclaimer: validate the results against your own reference samples before any analytical, engineering, safety or regulatory use.
 // AI disclosure: questo strumento esegue calcoli deterministici; non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).
 
+import { createMaterials } from './modules/materials.js';
+import { createPif } from './modules/pif.js';
+// License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (c) 2026 Flavio Pendolino
+// https://polyformproject.org/licenses/noncommercial/1.0.0
+// 
+// Author: Flavio Pendolino
+// Version: 0.1.0
+// License: PolyForm Noncommercial 1.0.0
+// Commercial use: penfla@me.com
+// Purpose: Cosformula - archivio locale di formulazioni cosmetiche
+// Method: Node.js + SQLite; verifica INCI su dataset CosIng locale
+// Disclaimer: validate the results against your own reference samples before any analytical, engineering, safety or regulatory use.
+// AI disclosure: questo strumento esegue calcoli deterministici; non genera contenuto tramite IA generativa (art. 50 AI Act non applicabile).
+
 const $ = s => document.querySelector(s);
 const h = (tag, props = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -42,7 +57,7 @@ const store = {
   get() { try { return JSON.parse(localStorage.getItem('cosf.state') || '{}'); } catch { return {}; } },
   set(v) { try { localStorage.setItem('cosf.state', JSON.stringify(v)); } catch { /* storage non disponibile */ } },
 };
-const S = { open: [], active: null, formulas: [], current: null, projects: [], inci: null, quill: null };
+const S = { open: [], active: null, formulas: [], current: null, projects: [], inci: null, quill: null, mode: 'formulas', view: 'sheet', materials: [], material: null };
 const sel = {}; // slug -> formula id selezionata per tab
 
 function persist() { store.set({ open: S.open, active: S.active, sel }); }
@@ -90,7 +105,7 @@ async function activate(slug) {
   renderTabs();
   $('#project-title').textContent = S.projects.find(p => p.slug === S.active)?.name || '—';
   if (!S.active) { S.formulas = []; renderList(); $('#sheet').replaceChildren(h('p', { class: 'empty' }, 'Crea o apri un progetto per iniziare.')); history.replaceState(null, '', '#'); return; }
-  await loadFormulas();
+  S.mode = 'formulas'; S.material = null; await loadFormulas(); await loadMaterials().catch(() => { S.materials = []; });
   const want = sel[S.active] && S.formulas.some(f => f.id === sel[S.active]) ? sel[S.active] : S.formulas[0]?.id;
   if (want) await openFormula(want); else $('#sheet').replaceChildren(h('p', { class: 'empty' }, 'Nessuna formula. Usa “+ Formula”.'));
 }
@@ -99,9 +114,25 @@ async function loadFormulas() { S.formulas = await api(`${qs()}/formulas`); rend
 function renderList() {
   const ul = $('#formula-list'); ul.replaceChildren();
   const f = $('#formula-filter').value.toLowerCase();
+  $('#mode-formulas').classList.toggle('on', S.mode === 'formulas'); $('#mode-materials').classList.toggle('on', S.mode === 'materials');
+  $('#btn-new-formula').textContent = S.mode === 'formulas' ? '+ Formula' : '+ Materia prima';
+  if (S.mode === 'materials') {
+    for (const m of S.materials.filter(x => !f || `${x.name} ${x.inci} ${x.supplier}`.toLowerCase().includes(f)))
+      ul.append(h('li', { class: m.id === S.material?.id ? 'active' : '', tabindex: 0, onclick: () => materials.open(m.id), onkeydown: e => e.key === 'Enter' && materials.open(m.id) },
+        h('span', {}, m.name), h('small', {}, `${m.sds ? '✔' : '✗'}SDS ${m.tds ? '✔' : '✗'}TDS`)));
+    if (!S.materials.length) ul.append(h('li', { class: 'muted' }, 'Nessuna materia prima.'));
+    return;
+  }
   for (const x of S.formulas.filter(x => !f || `${x.code} ${x.name}`.toLowerCase().includes(f)))
-    ul.append(h('li', { class: x.id === S.current?.id ? 'active' : '', tabindex: 0, onclick: () => openFormula(x.id), onkeydown: e => e.key === 'Enter' && openFormula(x.id) },
+    ul.append(h('li', { class: x.id === S.current?.id ? 'active' : '', tabindex: 0, onclick: () => { S.mode = 'formulas'; openFormula(x.id); }, onkeydown: e => e.key === 'Enter' && openFormula(x.id) },
       h('span', {}, (x.code ? x.code + ' · ' : '') + x.name), h('small', {}, `v${x.version} · ${x.ingredients}ing · ${x.files}📎`)));
+}
+async function loadMaterials() { S.materials = await api(`${qs()}/materials`); }
+async function setMode(mode) {
+  await flushSave(); S.mode = mode; S.current = mode === 'formulas' ? S.current : S.current;
+  if (!S.active) return;
+  if (mode === 'materials') { await loadMaterials(); renderList(); S.material ? await materials.open(S.material.id) : S.materials[0] ? await materials.open(S.materials[0].id) : $('#sheet').replaceChildren(h('p', { class: 'empty' }, 'Nessuna materia prima. Usa “+ Materia prima” per aggiungerne una e allegare SDS/TDS.')); }
+  else { await loadFormulas(); S.current ? renderSheet() : S.formulas[0] ? await openFormula(S.formulas[0].id) : $('#sheet').replaceChildren(h('p', { class: 'empty' }, 'Nessuna formula. Usa “+ Formula”.')); }
 }
 
 // ---------------- scheda formula ----------------
@@ -131,10 +162,10 @@ async function saveProcessNow() {
   } catch (e) { procDirty = true; setState('Errore: ' + e.message); }
 }
 const saveProcess = debounce(saveProcessNow, 800);
-async function flushSave() { if (dirty) await saveNow(); await saveProcessNow(); await saving; }
+async function flushSave() { if (dirty) await saveNow(); await saveProcessNow(); if (S.pifFlush) await S.pifFlush(); if (S.matFlush) await S.matFlush(); await saving; }
 
 async function openFormula(id) {
-  await flushSave();
+  await flushSave(); S.mode = 'formulas';
   S.current = await api(`${qs()}/formulas/${id}`); sel[S.active] = id; persist();
   history.replaceState(null, '', `#/${S.active}/${id}`);
   renderList(); renderSheet();
@@ -148,6 +179,7 @@ function field(label, key, opts = {}) {
 
 function renderSheet() {
   const f = S.current, sh = $('#sheet'); sh.replaceChildren();
+  S.pifFlush = null;
   sh.append(
     h('div', { class: 'sheet-head' }, h('h2', { style: 'margin:0' }, f.name),
       h('div', { class: 'row' }, h('span', { id: 'save-state' }, ''),
@@ -155,6 +187,11 @@ function renderSheet() {
         h('button', { class: 'btn small', onclick: () => exportSheets([f.id], 'html') }, 'HTML'),
         h('button', { class: 'btn small', onclick: dupFormula }, 'Duplica'),
         h('button', { class: 'btn small danger', onclick: delFormula }, 'Elimina'))),
+    h('div', { class: 'seg', role: 'tablist' },
+      h('button', { class: S.view === 'sheet' ? 'on' : '', role: 'tab', onclick: () => { S.view = 'sheet'; renderSheet(); } }, 'Scheda formula'),
+      h('button', { class: S.view === 'pif' ? 'on' : '', role: 'tab', onclick: () => { S.view = 'pif'; renderSheet(); } }, 'PIF (Reg. CE 1223/2009)')));
+  if (S.view === 'pif') { sh.append(h('div', { id: 'pif-root' })); S.quill = null; pif.render($('#pif-root')); return; }
+  sh.append(
     h('div', { class: 'hdr' }, field('Codice', 'code', { max: 40 }), field('Nome formula', 'name'), field('Versione', 'version', { max: 20 }), field('Batch (g)', 'batch_g', { num: true, max: 15 })),
     h('h3', {}, 'Formula'), buildTable(),
     h('h3', {}, 'Note'), h('textarea', { class: 'notes', maxlength: 5000, 'aria-label': 'Note', oninput: e => { f.notes = e.target.value; scheduleSave(); } }, f.notes),
@@ -163,7 +200,7 @@ function renderSheet() {
   initEditor();
 }
 
-function emptyIng() { return { trade_name: '', inci: '', inci_status: 'none', cosing_ref: '', phase: '', function: '', percent: null, grams: null, supplier: '', note: '' }; }
+function emptyIng() { return { trade_name: '', inci: '', inci_status: 'none', cosing_ref: '', phase: '', function: '', percent: null, grams: null, supplier: '', note: '', material_id: null }; }
 function recalcGrams() { const f = S.current; document.querySelectorAll('#ing-body tr').forEach((tr, i) => { const ing = f.ingredients[i]; if (ing && ing.percent != null && f.batch_g != null) { ing.grams = round(ing.percent * f.batch_g / 100); tr.querySelector('[data-k=grams]').value = fmt(ing.grams); } }); updateTotals(); }
 function updateTotals() {
   const f = S.current; const p = f.ingredients.reduce((a, i) => a + (i.percent || 0), 0), g = f.ingredients.reduce((a, i) => a + (i.grams || 0), 0);
@@ -192,9 +229,13 @@ function buildTable() {
     const inci = h('input', { 'data-k': 'inci', value: ing.inci, maxlength: 300, 'aria-label': 'INCI', autocomplete: 'off', placeholder: 'INCI ufficiale (cerca CosIng)…',
       oninput: e => { ing.inci = e.target.value; ing.cosing_ref = ''; setBadge(ing, badge, ing.inci.trim() ? 'unverified' : 'none'); autocomplete(inci, ing, badge, tr); scheduleSave(); },
       onfocus: () => ing.inci.length >= 2 && autocomplete(inci, ing, badge, tr), onblur: () => setTimeout(hideAc, 150) });
-    const nameIn = h('input', { 'data-k': 'trade_name', value: ing.trade_name, maxlength: 200, 'aria-label': 'Nome commerciale',
-      oninput: e => { ing.trade_name = e.target.value; scheduleSave(); } });
-    tr.append(cell('phase', 'c-phase', { max: 20, label: 'Fase' }), h('td', {}, nameIn), h('td', { class: 'c-inci' }, h('div', { class: 'inci-cell' }, inci, badge)),
+    const matCell = h('div', { class: 'matcell' });
+    const refreshMat = () => matCell.replaceChildren(...matBadges(ing, tr, refreshMat));
+    const nameIn = h('input', { 'data-k': 'trade_name', value: ing.trade_name, maxlength: 200, 'aria-label': 'Nome commerciale', autocomplete: 'off', placeholder: 'Nome / cerca in materie prime…',
+      oninput: e => { ing.trade_name = e.target.value; scheduleSave(); matSuggest(nameIn, ing, tr, badge, refreshMat); },
+      onfocus: () => nameIn.value.length >= 1 && matSuggest(nameIn, ing, tr, badge, refreshMat), onblur: () => setTimeout(hideAc, 150) });
+    refreshMat();
+    tr.append(cell('phase', 'c-phase', { max: 20, label: 'Fase' }), h('td', { class: 'c-name' }, nameIn, matCell), h('td', { class: 'c-inci' }, h('div', { class: 'inci-cell' }, inci, badge)),
       cell('function', '', { label: 'Funzione' }), cell('percent', 'num c-pct', { num: true, max: 12, label: '%' }), cell('grams', 'num c-g', { num: true, max: 12, label: 'Grammi' }),
       cell('supplier', '', { label: 'Fornitore' }),
       h('td', { class: 'c-act' },
@@ -213,6 +254,38 @@ function buildTable() {
       h('button', { class: 'btn', onclick: verifyAll }, 'Verifica tutti gli INCI'), h('span', { class: 'muted' }, 'Gli ingredienti senza INCI sono ammessi.')));
 }
 function setBadge(ing, el, status) { ing.inci_status = status; el.className = 'badge ' + status; el.textContent = BADGE[status][0]; el.title = BADGE[status][1]; }
+
+// ---- materie prime collegate agli ingredienti ----
+function matBadges(ing, tr, refresh) {
+  const m = ing.material_id && S.materials.find(x => x.id === ing.material_id);
+  if (!m) return [h('button', { class: 'docb', title: ing.material_id ? 'Materia prima non trovata' : 'Crea una materia prima (con SDS/TDS) da questo ingrediente e collegala', onclick: async () => {
+    if (!(ing.trade_name || ing.inci).trim()) return toast('Inserisci almeno il nome dell’ingrediente');
+    const mat = await api(`${qs()}/materials`, { method: 'POST', body: { name: ing.trade_name || ing.inci, inci: ing.inci, inci_status: ing.inci_status, supplier: ing.supplier, function: ing.function } });
+    ing.material_id = mat.id; await loadMaterials(); refresh(); scheduleSave(); toast(`Materia prima “${mat.name}” creata: carica SDS/TDS nella sezione Materie prime.`);
+  } }, '📚+')];
+  return [h('button', { class: 'docb ' + (m.sds ? 'ok' : 'miss'), title: m.sds ? 'SDS presente' : 'SDS mancante', onclick: () => openMaterial(m.id) }, 'SDS' + (m.sds ? '✔' : '✗')),
+    h('button', { class: 'docb ' + (m.tds ? 'ok' : 'miss'), title: m.tds ? 'TDS presente' : 'TDS mancante', onclick: () => openMaterial(m.id) }, 'TDS' + (m.tds ? '✔' : '✗')),
+    h('button', { class: 'docb', title: 'Scollega la materia prima', onclick: () => { ing.material_id = null; refresh(); scheduleSave(); } }, '✕')];
+}
+async function openMaterial(id) { await flushSave(); S.mode = 'materials'; await loadMaterials(); renderList(); await materials.open(id); }
+function matSuggest(input, ing, tr, badge, refresh) {
+  clearTimeout(acTimer);
+  acTimer = setTimeout(() => {
+    const q = input.value.trim().toLowerCase(); if (!q || ing.material_id) return hideAc();
+    const hits = S.materials.filter(m => `${m.name} ${m.inci} ${m.supplier} ${m.supplier_code}`.toLowerCase().includes(q)).slice(0, 8);
+    if (!hits.length || document.activeElement !== input) return hideAc();
+    const ac = $('#ac'); ac.replaceChildren(h('div', { class: 'muted' }, 'Materie prime (SDS/TDS):'));
+    for (const m of hits) ac.append(h('div', { role: 'option', onmousedown: async e => {
+      e.preventDefault(); const full = await api(`${qs()}/materials/${m.id}`);
+      ing.material_id = full.id; ing.trade_name = full.name; input.value = full.name;
+      if (full.inci) { ing.inci = full.inci; tr.querySelector('[data-k=inci]').value = full.inci; ing.cosing_ref = full.cosing_ref; setBadge(ing, badge, full.inci_status); }
+      if (full.supplier) { ing.supplier = full.supplier; tr.querySelector('[data-k=supplier]').value = full.supplier; }
+      if (!ing.function && full.function) { ing.function = full.function; tr.querySelector('[data-k=function]').value = full.function; }
+      hideAc(); refresh(); scheduleSave();
+    } }, m.name, h('small', {}, [m.inci, m.supplier, `${m.sds ? '✔' : '✗'}SDS ${m.tds ? '✔' : '✗'}TDS`].filter(Boolean).join(' · '))));
+    position(ac, input); ac.hidden = false;
+  }, 150);
+}
 
 // ---- INCI: autocomplete + verifica ----
 let acTimer, acReq = 0;
@@ -284,47 +357,68 @@ if (window.Quill) {
   window.Quill.register(FileVideo);
   window.Quill.import('formats/link').PROTOCOL_WHITELIST = ['http', 'https', 'mailto'];
 }
-function setEditorHtml(html) {
+function setEditorHtml(q, html) {
   const safe = window.DOMPurify.sanitize(toUrl(html || ''), { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|\/api\/projects\/)/i });
-  S.quill.setContents(S.quill.clipboard.convert({ html: safe }), 'silent');
+  q.setContents(q.clipboard.convert({ html: safe }), 'silent');
 }
-async function reloadProcess() { const f = await api(`${qs()}/formulas/${S.current.id}`); S.current.process_html = f.process_html; S.current.files = f.files; setEditorHtml(f.process_html); renderGallery(); }
+async function reloadProcess() { const f = await api(`${qs()}/formulas/${S.current.id}`); S.current.process_html = f.process_html; S.current.files = f.files; if (S.quill) setEditorHtml(S.quill, f.process_html); renderGallery(); }
 
-function insertAttachment(f) {
-  const q = S.quill, idx = (q.getSelection(true) || { index: q.getLength() }).index, url = fileUrl(f.stored_name);
+function insertAttachment(f, q) {
+  const idx = (q.getSelection(true) || { index: q.getLength() }).index, url = fileUrl(f.stored_name);
   if (f.kind === 'image') { q.insertEmbed(idx, 'image', url, 'user'); q.insertText(idx + 1, '\n', 'user'); q.setSelection(idx + 2, 0, 'silent'); }
   else if (f.kind === 'video') { q.insertEmbed(idx, 'filevideo', url, 'user'); q.setSelection(idx + 1, 0, 'silent'); }
   else { q.insertText(idx, f.original_name, 'link', url, 'user'); q.setSelection(idx + f.original_name.length, 0, 'silent'); }
 }
-async function addFilesToProcess(files) {
+async function addFilesToQuill(q, files, atIndex = null) {
   if (!files.length) return;
   const r = await uploadFiles(files, p => setState(`Caricamento ${p}%`));
   S.current.files.push(...r.created); renderGallery();
-  for (const f of r.created) insertAttachment(f);
-  setState(r.errors.length ? 'Rifiutati: ' + r.errors.map(e => `${e.name} (${e.error})`).join('; ') : 'Allegato inserito');
+  if (atIndex != null) q.setSelection(Math.min(atIndex, q.getLength() - 1), 0, 'silent');
+  for (const f of r.created) insertAttachment(f, q);
+  setState(r.errors.length ? 'Rifiutati: ' + r.errors.map(e => `${e.name} (${e.error})`).join('; ') : r.created.length === 1 ? 'Allegato inserito' : `${r.created.length} allegati inseriti`);
 }
-function showAttachPop(anchor) {
+function showAttachPop(anchor, q) {
   const pop = $('#attach-pop'); pop.replaceChildren();
-  const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { pop.hidden = true; addFilesToProcess([...input.files]); } });
-  pop.append(h('strong', {}, 'Inserisci nel processo'), h('div', { class: 'muted' }, 'Clic su un allegato per inserirlo alla posizione del cursore. Puoi anche trascinare o incollare file nell’editor.'));
-  for (const f of S.current.files) pop.append(h('div', { class: 'att', role: 'button', tabindex: 0, onclick: () => { pop.hidden = true; insertAttachment(f); } },
+  const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { pop.hidden = true; addFilesToQuill(q, [...input.files]); } });
+  pop.append(h('strong', {}, 'Inserisci nel testo'), h('div', { class: 'muted' }, 'Clic su un allegato per inserirlo alla posizione del cursore. Puoi anche trascinare o incollare file nell’editor.'));
+  for (const f of S.current.files) pop.append(h('div', { class: 'att', role: 'button', tabindex: 0, onclick: () => { pop.hidden = true; insertAttachment(f, q); } },
     f.kind === 'image' ? h('img', { src: fileUrl(f.stored_name), alt: '' }) : h('span', { class: 'ficon' }, f.kind === 'video' ? '▶' : '📄'), h('span', {}, f.original_name)));
   if (!S.current.files.length) pop.append(h('p', { class: 'muted' }, 'Nessun allegato ancora caricato.'));
   pop.append(h('button', { class: 'btn small primary', onclick: () => input.click() }, 'Carica da computer…'), input);
   position(pop, anchor); pop.hidden = false;
 }
 document.addEventListener('click', e => { const p = $('#attach-pop'); if (!p.hidden && !p.contains(e.target) && !e.target.closest('.ql-attach')) p.hidden = true; });
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+function dropIndex(q, e) {
+  try {
+    let node, off = 0;
+    if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(e.clientX, e.clientY); node = p?.offsetNode; off = p?.offset || 0; }
+    else if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(e.clientX, e.clientY); node = r?.startContainer; off = r?.startOffset || 0; }
+    const blot = node && window.Quill.find(node, false);
+    return blot ? q.getIndex(blot) + (node.nodeType === 3 ? off : 0) : null;
+  } catch { return null; }
+}
 
-function initEditor() {
+/** Editor rich text con 📎, drag&drop e incolla di file (immagini/video/documenti inseriti nel testo). */
+function makeEditor(el, html, onUser, placeholder = 'Scrivi qui… Inserisci foto e file con 📎, trascinandoli o incollandoli.') {
+  let q;
   const toolbar = { container: [[{ header: [1, 2, 3, false] }], ['bold', 'italic', 'underline', 'strike'], [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }], [{ align: [] }], ['blockquote', 'link'], ['attach'], ['clean']],
-    handlers: { attach() { showAttachPop(document.querySelector('.ql-attach')); } } };
-  S.quill = new window.Quill('#editor', { theme: 'snow', modules: { toolbar }, placeholder: 'Descrivi il processo preparativo: fasi, temperature, tempi, agitazione… Inserisci foto e file con 📎, trascinandoli o incollandoli.' });
-  const b = document.querySelector('.ql-attach'); b.textContent = '📎 Allegato'; b.title = 'Inserisci un allegato (foto, video, file) nel testo'; b.style.width = 'auto'; b.setAttribute('aria-label', 'Inserisci allegato');
-  setEditorHtml(S.current.process_html);
+    handlers: { attach() { showAttachPop(q.getModule('toolbar').container.querySelector('.ql-attach'), q); } } };
+  q = new window.Quill(el, { theme: 'snow', modules: { toolbar }, placeholder });
+  const b = q.getModule('toolbar').container.querySelector('.ql-attach');
+  b.textContent = '📎 Allegato'; b.title = 'Inserisci un allegato (foto, video, file) nel testo'; b.style.width = 'auto'; b.setAttribute('aria-label', 'Inserisci allegato');
+  setEditorHtml(q, html);
+  q.on('text-change', (_d, _o, src) => { if (src === 'user') onUser(); });
+  q.root.addEventListener('dragover', e => { if (hasFiles(e)) { e.preventDefault(); q.root.classList.add('dropping'); } }, true);
+  q.root.addEventListener('dragleave', () => q.root.classList.remove('dropping'), true);
+  q.root.addEventListener('drop', e => { q.root.classList.remove('dropping'); if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); addFilesToQuill(q, [...e.dataTransfer.files], dropIndex(q, e)); } }, true);
+  q.root.addEventListener('paste', e => { if (e.clipboardData?.files?.length) { e.preventDefault(); e.stopPropagation(); addFilesToQuill(q, [...e.clipboardData.files]); } }, true);
+  return q;
+}
+function initEditor() {
   procDirty = false;
-  S.quill.on('text-change', (_d, _o, src) => { if (src === 'user') { procDirty = true; setState('Modifiche non salvate…'); saveProcess(); } });
-  S.quill.root.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFilesToProcess([...e.dataTransfer.files]); } }, true);
-  S.quill.root.addEventListener('paste', e => { if (e.clipboardData?.files?.length) { e.preventDefault(); e.stopPropagation(); addFilesToProcess([...e.clipboardData.files]); } }, true);
+  S.quill = makeEditor('#editor', S.current.process_html, () => { procDirty = true; setState('Modifiche non salvate…'); saveProcess(); },
+    'Descrivi il processo preparativo: fasi, temperature, tempi, agitazione… Inserisci foto e file con 📎, trascinandoli o incollandoli.');
 }
 
 // ---- allegati ----
@@ -339,11 +433,11 @@ function fileCard(fl) {
     h('div', { class: 'row' }, h('a', { class: 'btn small', href: url + (fl.kind === 'image' || fl.kind === 'video' || fl.mime === 'application/pdf' ? '' : '?download=1'), target: '_blank', rel: 'noopener noreferrer' }, fl.kind === 'doc' || fl.kind === 'data' ? 'Apri / scarica' : 'Apri'),
       h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Eliminare l’allegato?')) return; await saveProcessNow(); await api(`${qs()}/files/${fl.id}`, { method: 'DELETE' }); await reloadProcess(); } }, 'Elimina')));
 }
-function renderGallery() { const g = $('#gallery'); g.replaceChildren(...S.current.files.map(fileCard)); }
-function uploadFiles(files, onProgress = () => {}) {
+function renderGallery() { const g = $('#gallery'); if (!g) return; g.replaceChildren(...S.current.files.map(fileCard)); }
+function uploadTo(url, files, fields = {}, onProgress = () => {}) {
   return new Promise(resolve => {
-    const fd = new FormData(); for (const f of files) fd.append('files', f);
-    const x = new XMLHttpRequest(); x.open('POST', `/api/projects/${S.active}/formulas/${S.current.id}/files`);
+    const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, v ?? ''); for (const f of files) fd.append('files', f);
+    const x = new XMLHttpRequest(); x.open('POST', url);
     x.upload.onprogress = e => onProgress(Math.round(e.loaded / e.total * 100));
     x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch { /* */ }
       resolve({ created: j.created || [], errors: j.errors || (j.error ? [{ name: '', error: j.error }] : [{ name: '', error: 'Errore' }]) }); };
@@ -351,10 +445,11 @@ function uploadFiles(files, onProgress = () => {}) {
     x.send(fd);
   });
 }
+const uploadFiles = (files, onProgress) => uploadTo(`/api/projects/${S.active}/formulas/${S.current.id}/files`, files, {}, onProgress);
 function buildFiles() {
   const status = h('div', { class: 'muted', role: 'status' });
   const input = h('input', { type: 'file', multiple: true, hidden: true, accept: '.jpg,.jpeg,.png,.gif,.webp,.avif,.mp4,.mov,.webm,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.txt,.md,.csv,.json', onchange: () => up(input.files) });
-  const drop = h('div', { class: 'drop', ondragover: e => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'), ondrop: e => { e.preventDefault(); drop.classList.remove('over'); up(e.dataTransfer.files); } },
+  const drop = h('div', { class: 'drop', ondragover: e => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'), ondrop: e => { e.preventDefault(); e.stopPropagation(); drop.classList.remove('over'); up(e.dataTransfer.files); } },
     'Trascina qui i file (immagini, video mp4/webm/mov, PDF, docx, xlsx, pptx, odt/ods, txt, md, csv, json) oppure ', h('button', { class: 'btn small', onclick: () => input.click() }, 'sfoglia'), input, status);
   async function up(files) {
     if (!files.length) return;
@@ -459,6 +554,44 @@ async function runSetup() {
     } catch (err) { msg.textContent = err.message; go.disabled = false; go.textContent = 'Crea database e inizia'; }
   }));
 }
+
+// ---------------- moduli (materie prime, PIF) ----------------
+function inciSuggest(input, onPick) {
+  let t;
+  input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => {
+    const q = input.value.trim(); if (q.length < 2) return hideAc();
+    let res = []; try { res = await api('/inci/search?q=' + encodeURIComponent(q)); } catch { return; }
+    if (document.activeElement !== input) return;
+    const ac = $('#ac'); ac.replaceChildren();
+    if (!res.length) ac.append(h('div', { class: 'muted' }, 'Nessuna voce nel dataset CosIng locale — INCI libero ammesso'));
+    for (const r of res) ac.append(h('div', { role: 'option', onmousedown: e => { e.preventDefault(); hideAc(); onPick(r); } }, r.inci_name, h('small', {}, [r.functions, r.cas && 'CAS ' + r.cas].filter(Boolean).join(' · '))));
+    position(ac, input); ac.hidden = false; }, 180); });
+  input.addEventListener('blur', () => setTimeout(hideAc, 150));
+}
+const ctx = { $, h, api, S, qs, toast, fmt, round, parseNum, debounce, position, dl: u => dl(u), uploadTo, makeEditor, fromUrl, toUrl, setState, loadMaterials, renderList, openFormula: id => openFormula(id), inciSuggest };
+const materials = createMaterials(ctx);
+const pif = createPif(ctx);
+$('#mode-formulas').onclick = () => setMode('formulas');
+$('#mode-materials').onclick = () => { if (!S.active) return toast('Apri prima un progetto'); setMode('materials'); };
+const newBtn = $('#btn-new-formula'), origNew = newBtn.onclick;
+newBtn.onclick = () => (S.mode === 'materials' ? (S.active ? materials.create() : toast('Apri prima un progetto')) : origNew());
+
+// Drag&drop globale: i file rilasciati fuori dagli editor non aprono più il browser, ma vengono allegati.
+const overlay = h('div', { id: 'drop-overlay', hidden: true }, 'Rilascia i file per allegarli'); document.body.append(overlay);
+let dragDepth = 0;
+document.addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; overlay.hidden = false; } });
+document.addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; overlay.hidden = true; } });
+document.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener('drop', async e => {
+  if (!hasFiles(e)) return; e.preventDefault(); dragDepth = 0; overlay.hidden = true;
+  const files = [...e.dataTransfer.files];
+  if (e.target.closest?.('.ql-editor, .drop, dialog')) return;
+  if (S.mode === 'materials') return materials.dropFiles(files);
+  if (!S.current) return toast('Apri prima una formula');
+  const r = await uploadFiles(files, p => setState(`Caricamento ${p}%`));
+  if (r.created.length) { S.current.files.push(...r.created); document.querySelector('#gallery') && renderGallery(); }
+  toast(r.errors.length ? 'Rifiutati: ' + r.errors.map(x => `${x.name} (${x.error})`).join('; ') : `${r.created.length} file allegati alla formula (sezione Allegati)`);
+});
 
 (async function init() {
   const setup = await api('/setup/status').catch(() => ({ initialized: true }));

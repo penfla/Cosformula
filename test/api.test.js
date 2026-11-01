@@ -193,3 +193,73 @@ test('allegati nel processo: riferimenti, rimozione, export/import, stampa', asy
   const after = (await api.get(`/api/projects/${p}/formulas/${f}`)).body.process_html;
   assert.ok(!after.includes('cosfile:') && !after.includes('<img') && after.includes('Passo 1'));
 });
+
+const PDF = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n');
+
+test('materie prime: SDS/TDS, collegamento ingredienti, PIF, stampa, backup v2', async () => {
+  const p = (await api.post('/api/projects').send({ name: 'PIF' })).body.slug;
+  const m = (await api.post(`/api/projects/${p}/materials`).send({ name: 'Glicerina <b>99</b>', inci: 'Glycerin', inci_status: 'verified', supplier: 'ACME', noael: 1000, noael_ref: 'SCCS', dermal_abs: 0.5, active_pct: 99.5, impurities: 'DEG < 0,1%' })).body;
+  assert.equal(m.inci_status, 'verified'); assert.equal(m.active_pct, 99.5);
+  assert.equal((await api.post(`/api/projects/${p}/materials`).send({ name: 'X', inci: 'Foo Bar', inci_status: 'verified' })).body.inci_status, 'unverified');
+  // upload SDS/TDS con metadati
+  const sds = await api.post(`/api/projects/${p}/materials/${m.id}/files`).field('doc_type', 'SDS').field('doc_date', '2025-03-01').field('revision', '4').field('language', 'it').attach('files', PDF, 'SDS glicerina.pdf');
+  assert.equal(sds.status, 201); assert.equal(sds.body.created[0].doc_type, 'SDS'); assert.equal(sds.body.created[0].doc_date, '2025-03-01');
+  assert.equal((await api.post(`/api/projects/${p}/materials/${m.id}/files`).field('doc_type', 'TDS').attach('files', Buffer.from('<html>'), 'tds.pdf')).status, 400);
+  assert.equal((await api.post(`/api/projects/${p}/materials/${m.id}/files`).field('doc_type', 'TDS').field('doc_date', 'ieri; drop').attach('files', PDF, 'tds.pdf')).body.created[0].doc_date, '');
+  assert.equal((await api.post(`/api/projects/${p}/materials/999/files`).attach('files', PDF, 'a.pdf')).status, 404);
+  const patch = await api.patch(`/api/projects/${p}/files/${sds.body.created[0].id}`).send({ doc_type: 'COA', revision: '5' });
+  assert.equal(patch.status, 200);
+  await api.patch(`/api/projects/${p}/files/${sds.body.created[0].id}`).send({ doc_type: 'SDS' });
+  const list = (await api.get(`/api/projects/${p}/materials`)).body;
+  assert.equal(list[0].sds, 1); assert.equal(list[0].tds, 1);
+  // formula collegata
+  const f = (await api.post(`/api/projects/${p}/formulas`).send({ name: 'Crema', batch_g: 100 })).body.id;
+  await api.put(`/api/projects/${p}/formulas/${f}`).send({ name: 'Crema', batch_g: 100, ingredients: [{ trade_name: 'Glicerina', inci: 'Glycerin', percent: 5, material_id: m.id }, { trade_name: 'Acqua', inci: 'Aqua', percent: 95, material_id: 9999 }] });
+  const got = (await api.get(`/api/projects/${p}/formulas/${f}`)).body;
+  assert.equal(got.ingredients[0].material_id, m.id); assert.equal(got.ingredients[1].material_id, null);
+  assert.equal((await api.get(`/api/projects/${p}/materials/${m.id}`)).body.used_in.length, 1);
+  // PIF
+  let pif = (await api.get(`/api/projects/${p}/formulas/${f}/pif`)).body;
+  assert.equal(pif.rows[0].sds.original_name, 'SDS glicerina.pdf'); assert.ok(pif.sectionDefs.length >= 18);
+  const sv = await api.put(`/api/projects/${p}/formulas/${f}/pif/data`).send({ data: { product_name: 'Crema <i>X</i>', daily_amount_g: '1,54', retention_factor: 1, rp_name: 'Lab Srl', evil: 'x' } });
+  assert.equal(sv.body.data.daily_amount_g, 1.54); assert.equal(sv.body.data.evil, undefined);
+  const sec = await api.put(`/api/projects/${p}/formulas/${f}/pif/sections/a9`).send({ html: '<p>Nessun SUE</p><script>x</script><img src="https://e.com/a.png">' });
+  assert.equal(sec.body.html, '<p>Nessun SUE</p>');
+  assert.equal((await api.put(`/api/projects/${p}/formulas/${f}/pif/sections/__proto__`).send({ html: 'x' })).status, 400);
+  // stampa PIF
+  const pr = await api.get(`/api/projects/${p}/formulas/${f}/pif/print`);
+  assert.equal(pr.status, 200);
+  assert.ok(pr.text.includes('Crema &lt;i&gt;X&lt;/i&gt;') && !pr.text.includes('<i>X</i>'));
+  assert.match(pr.text, /A\.8 Profilo tossicologico/); assert.match(pr.text, /conforme/); assert.match(pr.text, /SDS glicerina\.pdf/); assert.match(pr.text, /Nessun SUE/);
+  assert.ok(pr.text.includes('non collegato') && pr.text.includes('✔ SDS glicerina.pdf'));
+  // backup v2: materie prime, documenti, collegamenti e PIF
+  const z = await request(app).get(`/api/projects/${p}/export?format=zip`).set('Host', H.Host).buffer().parse((res, cb) => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); });
+  const ns = (await api.post('/api/import').attach('file', z.body, 'p.zip')).body.imported[0].slug;
+  const nm = (await api.get(`/api/projects/${ns}/materials`)).body;
+  assert.equal(nm.length, 2); const gl = nm.find(x => x.inci === 'Glycerin'); assert.equal(gl.sds, 1); assert.equal(gl.tds, 1);
+  const nf = (await api.get(`/api/projects/${ns}/formulas`)).body[0];
+  const ngot = (await api.get(`/api/projects/${ns}/formulas/${nf.id}`)).body;
+  assert.equal(ngot.ingredients[0].material_id, gl.id);
+  const npif = (await api.get(`/api/projects/${ns}/formulas/${nf.id}/pif`)).body;
+  assert.equal(npif.data.rp_name, 'Lab Srl'); assert.equal(npif.sections.a9, '<p>Nessun SUE</p>');
+  // eliminazione materia prima: scollega, rimuove i file
+  assert.equal((await api.del(`/api/projects/${p}/materials/${m.id}`)).status, 200);
+  assert.equal((await api.get(`/api/projects/${p}/formulas/${f}`)).body.ingredients[0].material_id, null);
+});
+
+test('migrazione di un DB v1 esistente', async () => {
+  const Database = (await import('better-sqlite3')).default;
+  const dir = path.join(tmp, 'projects', 'vecchio'); fs.mkdirSync(path.join(dir, 'uploads', '.tmp'), { recursive: true });
+  const old = new Database(path.join(dir, 'project.db'));
+  old.exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE formulas (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT 'N', version TEXT NOT NULL DEFAULT '1.0', batch_g REAL, notes TEXT NOT NULL DEFAULT '', process_html TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+  CREATE TABLE ingredients (id INTEGER PRIMARY KEY AUTOINCREMENT, formula_id INTEGER NOT NULL REFERENCES formulas(id) ON DELETE CASCADE, position INTEGER NOT NULL DEFAULT 0, trade_name TEXT NOT NULL DEFAULT '', inci TEXT NOT NULL DEFAULT '', inci_status TEXT NOT NULL DEFAULT 'none', cosing_ref TEXT NOT NULL DEFAULT '', phase TEXT NOT NULL DEFAULT '', function TEXT NOT NULL DEFAULT '', percent REAL, grams REAL, supplier TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
+  CREATE TABLE files (id INTEGER PRIMARY KEY AUTOINCREMENT, formula_id INTEGER NOT NULL REFERENCES formulas(id) ON DELETE CASCADE, original_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE, mime TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+  INSERT INTO meta VALUES('schema_version','1'),('project_name','Vecchio');
+  INSERT INTO formulas(name) VALUES('Legacy'); INSERT INTO ingredients(formula_id,trade_name) VALUES(1,'Acqua');
+  INSERT INTO files(formula_id,original_name,stored_name,mime,kind,size,sha256) VALUES(1,'a.png','11111111-1111-1111-1111-111111111111.png','image/png','image',3,'x');`);
+  old.close();
+  const fl = (await api.get('/api/projects/vecchio/formulas/1')).body;
+  assert.equal(fl.name, 'Legacy'); assert.equal(fl.files.length, 1); assert.equal(fl.ingredients[0].material_id, null);
+  assert.equal((await api.get('/api/projects/vecchio/materials')).status, 200);
+});

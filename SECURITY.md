@@ -14,6 +14,8 @@ Modello di minaccia: app **locale, single-user, senza autenticazione**, bind `12
 | Import ZIP/JSON | zip-slip, zip-bomb, JSON ostile | nessuna estrazione per nome (regex + percorso generato), max 5000 voci, tetto byte, `validateEntrySizes`; schema validato, HTML ri-sanitizzato, file ri-validati | test round-trip + rifiuti |
 | Allegati nel processo | immagini/link esterni, tracking, riferimenti forgiati | `img`/`video` ammessi solo con `cosfile:<uuid.ext>` verificato contro i file del progetto (altri `src` eliminati); link solo http/https/mailto/`cosfile`; accesso per nome con regex UUID | test `allegati nel processo` |
 | Export/stampa | XSS nella pagina generata | tutto il testo è escapato; il processo è ri-sanitizzato prima del render; CSP `script-src 'self'` (solo `/print.js`); `ids`/`size` validati | test `stampa` (escape, ids non validi) |
+| Materie prime / PIF | upload documenti, metadati, JSON ostile | stessa allowlist + magic bytes degli altri allegati; `doc_type` in enum, `doc_date` solo `AAAA-MM-GG`; i dati PIF accettano solo chiavi note (whitelist, lunghezze, numeri validati); sezioni PIF sanitizzate come il processo; sezione sconosciuta → 400; backup v2 rivalidato in import | test `materie prime…PIF…backup v2` |
+| Migrazione DB | perdita dati | migrazione v1→v2 transazionale (ricostruzione tabella `files`), testata su DB legacy | test `migrazione` |
 | Integrità INCI | stato "verificato" falsificabile | assegnato solo dal server dopo match esatto nel dataset | test CRUD |
 | SSRF | lookup live | solo `COSING_LIVE_URL` configurato dall'operatore, https, `redirect:'error'`, timeout 8 s | code review |
 | DoS | richieste/upload massivi | rate limit, limiti multer/JSON | — |
@@ -21,6 +23,7 @@ Modello di minaccia: app **locale, single-user, senza autenticazione**, bind `12
 | Dipendenze | CVE | `npm audit --omit=dev`; `archiver` sostituito con `yazl` (evita minimatch vulnerabile) | vedi sotto |
 
 ## Limiti noti
+- I valori di default di esposizione (SCCS) e i risultati SED/MoS sono indicativi e non sostituiscono il valutatore della sicurezza (Reg. CE 1223/2009, art. 10).
 - Nessuna autenticazione/ruoli/cifratura a riposo: i file in `data/` sono in chiaro. Per dati confidenziali (NDA) usare cifratura del disco.
 - Quill 2.0.3: advisory GHSA-v3m3-f69x-jf25 (low) riguarda `getSemanticHTML()`, **non usato**; l'HTML è comunque sanitizzato.
 - Il PDF è mostrato dal visualizzatore del browser (superficie del viewer, non dell'app).

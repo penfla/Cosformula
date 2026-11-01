@@ -25,6 +25,8 @@ import { router as files } from './routes/files.js';
 import { router as inci } from './routes/inci.js';
 import { router as backup } from './routes/backup.js';
 import { router as printRoute } from './routes/print.js';
+import { router as materials } from './routes/materials.js';
+import { router as pif } from './routes/pif.js';
 import { router as setup } from './routes/setup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -70,7 +72,9 @@ export function createApp({ port = 3000, host = '127.0.0.1' } = {}) {
   });
   api.get('/projects/:slug', (q, r) => { getDb(q.params.slug); r.json(listProjects().find(p => p.slug === q.params.slug)); });
   api.use('/projects/:slug/formulas', formulas);
+  api.use('/projects/:slug/materials', materials);
   api.use('/projects/:slug', files);
+  api.use('/projects/:slug', pif);
   api.use('/setup', setup);
   api.use('/inci', inci);
   api.use('/', backup);
